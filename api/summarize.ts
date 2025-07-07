@@ -1,5 +1,4 @@
 // api/summarize.ts
-
 import { VercelRequest, VercelResponse } from '@vercel/node';
 import fetch from 'node-fetch';
 import * as cheerio from 'cheerio';
@@ -11,7 +10,7 @@ const GEMINI_ENDPOINT =
   'https://generativelanguage.googleapis.com/v1beta2/models/text-bison-001:generateText';
 
 export default async function handler(
-  req: VercelRequest,
+  _req: VercelRequest,
   res: VercelResponse
 ) {
   const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
@@ -34,9 +33,9 @@ export default async function handler(
     // 2. Scrape all 'Minutes' links
     const $ = cheerio.load(html);
     const rawLinks: string[] = [];
-    $('a[href]').each((_, a) => {
-      const href = $(a).attr('href')!.trim();
-      const txt = ($(a).text() || '').trim();
+    $('a[href]').each((_: any, a: any) => {
+      const href: string = $(a).attr('href')!.trim();
+      const txt: string = ($(a).text() || '').trim();
       if (/minutes/i.test(txt) || /minutes/i.test(href)) {
         rawLinks.push(href);
       }
@@ -49,16 +48,14 @@ export default async function handler(
     }
 
     // 3. Normalize to direct-download URLs
-    const pdfUrls = rawLinks.map((link) => {
-      // If it's a Google Drive preview link, extract file ID
+    const pdfUrls: string[] = rawLinks.map((link: string) => {
       const driveMatch =
         link.match(/\/d\/([a-zA-Z0-9_-]+)\//) ||
         link.match(/[?&]id=([a-zA-Z0-9_-]+)/);
       if (link.includes('drive.google.com') && driveMatch) {
-        const fileId = driveMatch[1];
+        const fileId: string = driveMatch[1];
         return `https://drive.google.com/uc?export=download&id=${fileId}`;
       }
-      // Otherwise assume it’s a direct PDF already
       return link.startsWith('http')
         ? link
         : new URL(link, MATERIALS_URL).toString();
@@ -70,20 +67,22 @@ export default async function handler(
       try {
         const pdfResp = await fetch(url);
         if (!pdfResp.ok) {
-          console.warn(`⏭️ Skipping ${url}: ${pdfResp.statusText}`);
+          console.warn(`Skipping ${url}: ${pdfResp.statusText}`);
           continue;
         }
-        const arrayBuffer = await pdfResp.arrayBuffer();
-        const { text } = await pdfParse(Buffer.from(arrayBuffer));
+        const arrayBuffer: ArrayBuffer = await pdfResp.arrayBuffer();
+        const { text }: { text: string } = await pdfParse(
+          Buffer.from(arrayBuffer)
+        );
         // 5. Filter for "housing" paragraphs
         text
           .split(/\r?\n{2,}/g)
-          .filter((p) => /housing/i.test(p))
-          .forEach((p) => {
+          .filter((p: string) => /housing/i.test(p))
+          .forEach((p: string) => {
             collectedText += p.trim() + '\n\n';
           });
-      } catch (pdfErr) {
-        console.warn(`❌ Error parsing ${url}:`, pdfErr);
+      } catch (pdfErr: unknown) {
+        console.warn(`Error parsing ${url}:`, pdfErr);
       }
     }
 
@@ -102,10 +101,9 @@ export default async function handler(
         temperature: 0.2,
       }),
     });
-    const geminiData = await geminiResp.json();
+    const geminiData = (await geminiResp.json()) as { candidates?: { output: string }[] };
     const summary =
-      geminiData.candidates?.[0]?.output ||
-      'No summary returned by Gemini.';
+      geminiData.candidates?.[0]?.output || 'No summary returned by Gemini.';
 
     return res.status(200).json({ summary });
   } catch (err: any) {
