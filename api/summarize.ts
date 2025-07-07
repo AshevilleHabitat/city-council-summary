@@ -1,11 +1,9 @@
-
 // Vercel deploys files in the /api directory as serverless functions.
 // This function will be accessible at the `/api/summarize` endpoint.
 
 import '@napi-rs/canvas'; // Explicitly import to ensure it's bundled by Vercel for pdfjs-dist
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
-import * as cheerio from 'cheerio';
 import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { MeetingSummary } from '../types';
 
@@ -15,104 +13,91 @@ if (!process.env.API_KEY) {
 }
 
 // For serverless environments like Vercel, we must disable worker threads in pdfjs-dist.
-// This prevents it from trying to spawn a worker process, which is not supported.
 GlobalWorkerOptions.disableWorker = true;
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-const councilMeetingsUrl = 'https://www.ashevillenc.gov/government/city-council-meeting-materials/';
+const apiBaseUrl = 'https://asheville.civicclerk.com';
 
+/**
+ * Fetches meeting links by calling the official CivicClerk JSON API,
+ * which is more robust than scraping HTML.
+ */
 async function getMeetingLinks(): Promise<{ date: string, url: string }[]> {
-  try {
-    const response = await fetch(councilMeetingsUrl);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch meeting page: ${response.statusText}`);
-    }
-    const html = await response.text();
-    const $ = cheerio.load(html);
-    const links: { date: string, url: string }[] = [];
+  const links: { date: string, url: string }[] = [];
+  const today = new Date();
+  const daysToScan = 90; // Scan the last 3 months for meetings
+  const fetchPromises: Promise<void>[] = [];
 
-    // The website structure has changed. This new selector targets the current layout.
-    // It finds each meeting "card", extracts the title for the date, and finds the specific "Minutes" PDF link.
-    $('div.card').each((_i, element) => {
-      const card = $(element);
-      const title = card.find('h3.card-title').text().trim();
-      
-      // Find the anchor tag that specifically says "Minutes"
-      const minutesLink = card.find('p.card-text a').filter((_idx, linkEl) => {
-          return $(linkEl).text().trim().toLowerCase() === 'minutes';
-      });
-
-      if (minutesLink.length > 0) {
-        let href = minutesLink.attr('href');
-        
-        // Parse date from a format like "July 23, 2024 City Council..."
-        const dateMatch = title.match(/^(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}/i);
-
-        if (href && dateMatch) {
-            // Check for Google Drive viewer links and transform them to direct download links.
-            const googleDriveRegex = /drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/;
-            const driveMatch = href.match(googleDriveRegex);
-            if (driveMatch && driveMatch[1]) {
-              const fileId = driveMatch[1];
-              href = `https://drive.google.com/uc?export=download&id=${fileId}`;
-            }
-
-            const dateStr = dateMatch[0];
-            const dateObj = new Date(dateStr);
-            
-            if (!isNaN(dateObj.getTime())) {
-                const year = dateObj.getFullYear();
-                const month = String(dateObj.getMonth() + 1).padStart(2, '0');
-                const day = String(dateObj.getDate()).padStart(2, '0');
-                const formattedDate = `${year}-${month}-${day}`;
-                const fullUrl = new URL(href, councilMeetingsUrl).toString();
-                links.push({ date: formattedDate, url: fullUrl });
-            }
-        }
-      }
-    });
+  for (let i = 0; i < daysToScan; i++) {
+    const dateToScan = new Date(today);
+    dateToScan.setDate(today.getDate() - i);
     
-    // Sort by date descending to get the most recent ones first.
-    links.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-
-    // Limit to the most recent 5 for this proof-of-concept to manage execution time
-    return links.slice(0, 5);
-  } catch (error) {
-    console.error("Error scraping meeting links:", error);
-    return [];
+    const year = dateToScan.getFullYear();
+    const month = String(dateToScan.getMonth() + 1).padStart(2, '0');
+    const day = String(dateToScan.getDate()).padStart(2, '0');
+    const formattedDate = `${year}-${month}-${day}`;
+    
+    const apiUrl = `${apiBaseUrl}/web/api/Meetings?date=${formattedDate}`;
+    
+    const promise = fetch(apiUrl)
+      .then(res => {
+        if (!res.ok) return null;
+        return res.json();
+      })
+      .then(meetingsData => {
+        if (Array.isArray(meetingsData)) {
+          for (const meeting of meetingsData) {
+            // Ensure it's a City Council meeting and has published minutes
+            if (meeting.BodyName === 'City Council') {
+              const minutesLink = meeting.Links.find((l: any) => l.FileTypeName === 'Minutes' && l.Url);
+              if (minutesLink) {
+                links.push({
+                  date: formattedDate,
+                  url: `${apiBaseUrl}${minutesLink.Url}`
+                });
+              }
+            }
+          }
+        }
+      })
+      .catch(_e => {
+        // Silently ignore errors for days with no meetings or failed fetches
+      });
+      
+    fetchPromises.push(promise);
   }
+
+  await Promise.all(fetchPromises);
+  
+  // Sort by date descending and take the most recent 5.
+  links.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  return links.slice(0, 5);
 }
 
 async function getPdfText(url: string): Promise<string> {
     try {
-        // IMPORTANT: Add { redirect: 'follow' } to handle Google Drive's download links,
-        // which issue a 302 redirect that server-side fetch doesn't follow by default.
         const response = await fetch(url, { redirect: 'follow' });
         
         if (!response.ok) {
-            throw new Error(`Failed to fetch PDF from ${url} after following redirects: ${response.status} ${response.statusText}`);
+            throw new Error(`Failed to fetch PDF from ${url}: ${response.status} ${response.statusText}`);
         }
         const arrayBuffer = await response.arrayBuffer();
         const pdfData = new Uint8Array(arrayBuffer);
 
-        // Using pdfjs-dist which is more robust
         const doc = await getDocument({ data: pdfData }).promise;
 
         let fullText = '';
         for (let i = 1; i <= doc.numPages; i++) {
             const page = await doc.getPage(i);
             const textContent = await page.getTextContent();
-            // The item from textContent.items can be complex, so we type it as any to satisfy strict mode
             const pageText = textContent.items.map((item: any) => ('str' in item ? item.str : '')).join(' ');
             fullText += pageText + '\n';
         }
-        // DIAGNOSTIC LOG
-        console.log(`Extracted ${fullText.length} characters from ${url}`);
         return fullText;
         
     } catch(error) {
         console.error(`Error parsing PDF from ${url}:`, error);
-        return ""; // Return empty string on failure
+        return "";
     }
 }
 
@@ -150,8 +135,6 @@ export default async function handler(
 ) {
   try {
     const meetingLinks = await getMeetingLinks();
-    // DIAGNOSTIC LOG
-    console.log(`Found ${meetingLinks.length} meeting links.`);
     
     if (meetingLinks.length === 0) {
       return res.status(200).json([]);
@@ -162,8 +145,6 @@ export default async function handler(
         if (!minutesText) return null;
 
         const summaryText = await summarizeHousingTopics(minutesText);
-        // DIAGNOSTIC LOG
-        console.log(`[${link.date}] Summary from AI: "${summaryText}"`);
         
         if (summaryText.toLowerCase().trim() !== "no housing topics found." && !summaryText.startsWith("Error:")) {
             return {
