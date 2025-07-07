@@ -80,7 +80,7 @@ export default async function handler(
     });
 
     if (!rawLinks.length) {
-      return res.status(200).json({ summary: '', message: 'No Minutes links found.' });
+      return res.status(200).json({ summaries: [], message: 'No Minutes links found.' });
     } {
       return res.status(200).json({ summary: '', message: 'No Minutes links found.' });
     }
@@ -117,7 +117,7 @@ export default async function handler(
     }
 
     if (!collected.trim()) {
-      return res.status(200).json({ summary: '', message: 'No housing mentions found.' });
+      return res.status(200).json({ summaries: [], message: 'No housing mentions found.' });
     }
 
     // 5) Summarize with Gemini
@@ -132,7 +132,7 @@ export default async function handler(
     const data = (await geminiResp.json()) as { candidates?: { output: string }[] };
     const summary = data.candidates?.[0]?.output || 'No summary returned.';
 
-    return res.status(200).json({ summary });
+    return res.status(200).json({ summaries: [summary] });
   } catch (err: any) {
     console.error('🚨 handler error:', err);
     return res.status(500).json({ error: err.message });
