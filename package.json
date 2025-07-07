@@ -9,15 +9,18 @@
   "dependencies": {
     "@google/genai": "^1.8.0",
     "@napi-rs/canvas": "^0.1.53",
-    "pdfjs-dist": "^4.5.136",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "cheerio": "^1.0.0-rc.12",
+    "pdf-parse": "^1.1.1",
+    "node-fetch": "^3.4.0"
   },
   "devDependencies": {
     "@types/node": "^20.12.12",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "@vercel/node": "^5.3.3",
+    "@types/pdf-parse": "^1.1.4",
     "esbuild": "^0.20.2",
     "typescript": "^5.4.5"
   }
