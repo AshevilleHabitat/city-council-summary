@@ -1,4 +1,3 @@
-
 // Vercel deploys files in the /api directory as serverless functions.
 // This function will be accessible at the `/api/summarize` endpoint.
 
@@ -38,12 +37,20 @@ async function getMeetingLinks(): Promise<{ date: string, url: string }[]> {
       });
 
       if (minutesLink.length > 0) {
-        const href = minutesLink.attr('href');
+        let href = minutesLink.attr('href');
         
         // Parse date from a format like "July 23, 2024 City Council..."
         const dateMatch = title.match(/^(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}/i);
 
-        if (href && href.endsWith('.pdf') && dateMatch) {
+        if (href && dateMatch) {
+            // Check for Google Drive viewer links and transform them to direct download links.
+            const googleDriveRegex = /drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/;
+            const driveMatch = href.match(googleDriveRegex);
+            if (driveMatch && driveMatch[1]) {
+              const fileId = driveMatch[1];
+              href = `https://drive.google.com/uc?export=download&id=${fileId}`;
+            }
+
             const dateStr = dateMatch[0];
             const dateObj = new Date(dateStr);
             
