@@ -1,6 +1,7 @@
 // Vercel deploys files in the /api directory as serverless functions.
 // This function will be accessible at the `/api/summarize` endpoint.
 
+import '@napi-rs/canvas'; // Explicitly import to ensure it's bundled by Vercel for pdfjs-dist
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 import * as cheerio from 'cheerio';
@@ -100,6 +101,7 @@ async function getPdfText(url: string): Promise<string> {
         for (let i = 1; i <= doc.numPages; i++) {
             const page = await doc.getPage(i);
             const textContent = await page.getTextContent();
+            // The item from textContent.items can be complex, so we type it as any to satisfy strict mode
             const pageText = textContent.items.map((item: any) => ('str' in item ? item.str : '')).join(' ');
             fullText += pageText + '\n';
         }
