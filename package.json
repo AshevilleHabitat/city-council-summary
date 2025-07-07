@@ -1,23 +1,16 @@
 {
   "name": "asheville-city-council-housing-updates",
+  "version": "1.0.0",
   "private": true,
-  "version": "0.0.0",
   "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
-  },
   "dependencies": {
-    "react-dom": "^19.1.0",
-    "react": "^19.1.0",
-    "@vercel/node": "^5.3.3",
     "@google/genai": "^1.8.0",
-    "cheerio": "^1.1.0"
+    "cheerio": "^1.0.0-rc.12",
+    "pdf-parse": "^1.1.1"
   },
   "devDependencies": {
-    "@types/node": "^22.14.0",
-    "typescript": "~5.7.2",
-    "vite": "^6.2.0"
+    "@types/node": "^20.12.12",
+    "@vercel/node": "^5.3.3",
+    "typescript": "^5.4.5"
   }
 }
