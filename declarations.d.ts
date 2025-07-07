@@ -1,9 +1,11 @@
-declare module 'pdfreader' {
-  export class PdfReader {
-    constructor(options?: any);
-    parseBuffer(
-      buffer: Buffer,
-      callback: (err: any, item: { text?: string } | null) => void
-    ): void;
-  }
+declare module 'pdf-parse' {
+  function pdf(dataBuffer: Buffer, options?: any): Promise<{
+    numpages: number;
+    numrender: number;
+    info: any;
+    metadata: any;
+    version: string;
+    text: string;
+  }>;
+  export default pdf;
 }

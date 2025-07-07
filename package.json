@@ -9,12 +9,13 @@
   "dependencies": {
     "@google/genai": "^1.8.0",
     "cheerio": "^1.0.0-rc.12",
-    "pdfreader": "^3.0.2",
+    "pdf-parse": "^1.1.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
     "@types/node": "^20.12.12",
+    "@types/pdf-parse": "^1.1.4",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "@vercel/node": "^5.3.3",

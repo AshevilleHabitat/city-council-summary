@@ -1,10 +1,10 @@
 // Vercel deploys files in the /api directory as serverless functions.
 // This function will be accessible at the `/api/summarize` endpoint.
 
-import { PdfReader } from "pdfreader";
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 import * as cheerio from 'cheerio';
+import pdf from 'pdf-parse';
 import { MeetingSummary } from '../types';
 
 // Ensure the API_KEY is available in the serverless environment
@@ -79,26 +79,20 @@ async function getMeetingLinks(): Promise<{ date: string, url: string }[]> {
 
 async function getPdfText(url: string): Promise<string> {
     try {
-        const response = await fetch(url);
+        // IMPORTANT: Add { redirect: 'follow' } to handle Google Drive's download links,
+        // which issue a 302 redirect that server-side fetch doesn't follow by default.
+        const response = await fetch(url, { redirect: 'follow' });
+        
         if (!response.ok) {
-            throw new Error(`Failed to fetch PDF from ${url}: ${response.statusText}`);
+            throw new Error(`Failed to fetch PDF from ${url} after following redirects: ${response.status} ${response.statusText}`);
         }
         const arrayBuffer = await response.arrayBuffer();
         const pdfBuffer = Buffer.from(arrayBuffer);
 
-        return new Promise((resolve, reject) => {
-            let content = '';
-            new PdfReader(null).parseBuffer(pdfBuffer, (err, item) => {
-                if (err) {
-                    reject(err);
-                } else if (!item) {
-                    // end of file
-                    resolve(content);
-                } else if (item.text) {
-                    content += item.text + ' ';
-                }
-            });
-        });
+        // Using pdf-parse which is more robust
+        const data = await pdf(pdfBuffer);
+        return data.text;
+        
     } catch(error) {
         console.error(`Error parsing PDF from ${url}:`, error);
         return ""; // Return empty string on failure
