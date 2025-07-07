@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "esbuild index.tsx --bundle --outfile=dist/bundle.js --jsx=automatic && cp index.html dist/index.html"
+    "build": "esbuild index.tsx --bundle --outfile=dist/bundle.js --jsx=automatic && cp index.html dist/index.html",
+    "postinstall": "mkdir -p node_modules/pdf-parse/test/data && echo '%PDF-1.1\n%âãÏÓ' > node_modules/pdf-parse/test/data/05-versions-space.pdf"
   },
   "dependencies": {
     "@google/genai": "^1.8.0",
