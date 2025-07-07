@@ -15,7 +15,6 @@
   },
   "devDependencies": {
     "@types/node": "^20.12.12",
-    "@types/pdfreader": "^3.0.0",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "@vercel/node": "^5.3.3",
