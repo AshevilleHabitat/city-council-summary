@@ -69,7 +69,10 @@ export default async function handler(
           continue;
         }
         const contentType = resp.headers.get('content-type') || '';
-        if (!/pdf/i.test(contentType)) {
+        // Accept both genuine PDF and Drive's octet-stream responses
+        if (
+          !(/pdf/i.test(contentType) || contentType.includes('application/octet-stream'))
+        ) {
           console.warn(`Skipping ${url}: content-type is ${contentType}`);
           continue;
         }
