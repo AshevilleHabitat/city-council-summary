@@ -25,23 +25,6 @@ export default async function handler(
   }
 
   try {
-    // 1) Create a `require` function inside ESM
-    const require = createRequire(import.meta.url);
-
-    // 2) Locate pdf-parse in node_modules
-    const pdfParseIndex = require.resolve('pdf-parse');
-    const pdfParseDir   = path.dirname(pdfParseIndex);
-    const dummyDir      = path.join(pdfParseDir, 'test', 'data');
-    const dummyPath     = path.join(dummyDir, '05-versions-space.pdf');
-
-    // 3) Write a minimal PDF before pdf-parse ever loads
-    await fs.mkdir(dummyDir,    { recursive: true });
-    await fs.writeFile(
-      dummyPath,
-      '%PDF-1.1\n%âãÏÓ\n',       // minimal PDF header
-      'binary'
-    );
-
     // 4) Dynamically import pdf-parse (now that dummy file exists)
     const pdfParseModule = await import('pdf-parse');
     const pdfParse = (pdfParseModule.default ?? pdfParseModule) as (
