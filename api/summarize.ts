@@ -48,11 +48,20 @@ async function getMeetingLinks(): Promise<{ date: string, url: string }[]> {
       })
     })
     .then(res => {
-      if (!res.ok) return null;
+      // FIX: Add robust response validation to prevent JSON parsing errors on HTML responses.
+      if (!res.ok) {
+        console.error(`Filter API request failed for year ${year} with status: ${res.status}`);
+        return null;
+      }
+      const contentType = res.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        console.error(`Filter API for year ${year} returned non-JSON content-type: ${contentType}`);
+        return null; // Don't try to parse non-JSON content.
+      }
       return res.json();
     })
     .then(meetingsOfYear => {
-      if (Array.isArray(meetingsOfYear)) {
+      if (meetingsOfYear && Array.isArray(meetingsOfYear)) {
         for (const meeting of meetingsOfYear) {
           if (meeting.HasMinutes && meeting.Date) {
             // Date is like "2024-06-25T17:00:00", we just need the date part.
@@ -63,7 +72,7 @@ async function getMeetingLinks(): Promise<{ date: string, url: string }[]> {
       }
     })
     .catch(e => {
-      console.error(`Error fetching filtered meetings for year ${year}:`, e);
+      console.error(`Error fetching or processing filtered meetings for year ${year}:`, e);
     });
   });
 
