@@ -100,7 +100,7 @@ async function getPdfText(url: string): Promise<string> {
         for (let i = 1; i <= doc.numPages; i++) {
             const page = await doc.getPage(i);
             const textContent = await page.getTextContent();
-            const pageText = textContent.items.map(item => ('str' in item ? item.str : '')).join(' ');
+            const pageText = textContent.items.map((item: any) => ('str' in item ? item.str : '')).join(' ');
             fullText += pageText + '\n';
         }
         return fullText;
