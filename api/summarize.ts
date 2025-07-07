@@ -23,7 +23,6 @@ const apiBaseUrl = 'https://asheville.civicclerk.com';
  * which is more robust than scraping HTML.
  */
 async function getMeetingLinks(): Promise<{ date: string, url: string }[]> {
-  console.log('Starting to fetch meeting links from CivicClerk API...');
   const links: { date: string, url: string }[] = [];
   const today = new Date();
   const daysToScan = 90; // Scan the last 3 months for meetings
@@ -43,16 +42,22 @@ async function getMeetingLinks(): Promise<{ date: string, url: string }[]> {
     const promise = fetch(apiUrl)
       .then(res => {
         if (!res.ok) {
-          console.log(`No meetings found for ${formattedDate} (status: ${res.status})`);
+          // This is expected for days without meetings.
           return null;
+        }
+        // The API returns an HTML page for dates with no meetings, which causes a JSON parse error.
+        // We must check the content-type to ensure we only process JSON responses.
+        const contentType = res.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+            return null; // Not JSON, so skip it.
         }
         return res.json();
       })
       .then(meetingsData => {
         if (Array.isArray(meetingsData)) {
           for (const meeting of meetingsData) {
-            // Ensure it's a City Council meeting and has published minutes
-            if (meeting.BodyName === 'City Council') {
+            // Correctly filter for the specific meeting name from the API data
+            if (meeting.BodyName === 'City Council Regular Meeting') {
               const minutesLink = meeting.Links.find((l: any) => l.FileTypeName === 'Minutes' && l.Url);
               if (minutesLink) {
                 links.push({
@@ -65,7 +70,7 @@ async function getMeetingLinks(): Promise<{ date: string, url: string }[]> {
         }
       })
       .catch(e => {
-        // Log errors for debugging, but don't stop the whole process
+        // Log actual errors for debugging, but don't stop the whole process
         console.error(`Error fetching or processing data for ${formattedDate}:`, e);
       });
       
@@ -74,13 +79,10 @@ async function getMeetingLinks(): Promise<{ date: string, url: string }[]> {
 
   await Promise.all(fetchPromises);
   
-  console.log(`Found ${links.length} total potential meeting links.`);
-  
-  // Sort by date descending and take the most recent 5.
+  // Sort by date descending and take the most recent 5 for processing.
   links.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   const finalLinks = links.slice(0, 5);
 
-  console.log('Final links to process:', finalLinks.map(l => l.url));
   return finalLinks;
 }
 
@@ -103,7 +105,6 @@ async function getPdfText(url: string): Promise<string> {
             const pageText = textContent.items.map((item: any) => ('str' in item ? item.str : '')).join(' ');
             fullText += pageText + '\n';
         }
-        console.log(`Extracted ${fullText.length} characters from ${url}`);
         return fullText;
         
     } catch(error) {
@@ -133,7 +134,6 @@ async function summarizeHousingTopics(minutesText: string): Promise<string> {
     });
     
     const summary = (response.text ?? '').trim();
-    console.log(`Gemini API response: "${summary}"`);
     return summary;
   } catch (error) {
     console.error("Error calling Gemini API:", error);
@@ -150,35 +150,30 @@ export default async function handler(
     const meetingLinks = await getMeetingLinks();
     
     if (meetingLinks.length === 0) {
-      console.log('No meeting links found, returning empty array.');
       return res.status(200).json([]);
     }
 
     const summaryPromises = meetingLinks.map(async (link) => {
         const minutesText = await getPdfText(link.url);
         if (!minutesText) {
-          console.log(`Skipping summary for ${link.url} due to empty text.`);
           return null;
         }
 
         const summaryText = await summarizeHousingTopics(minutesText);
         
         if (summaryText.toLowerCase().trim() !== "no housing topics found." && !summaryText.startsWith("Error:")) {
-            console.log(`Valid housing summary found for ${link.date}.`);
             return {
                 date: link.date,
                 summary: summaryText,
                 originalUrl: link.url,
             };
         }
-        console.log(`No valid housing summary found for ${link.date}.`);
         return null;
     });
 
     const results = await Promise.all(summaryPromises);
     const validSummaries = results.filter((s): s is MeetingSummary => s !== null);
     
-    console.log(`Returning ${validSummaries.length} valid summaries to the client.`);
     validSummaries.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
     res.setHeader('Cache-Control', 's-maxage=3600, stale-while-revalidate'); // Cache for 1 hour
