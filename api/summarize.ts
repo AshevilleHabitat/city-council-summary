@@ -4,13 +4,17 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 import * as cheerio from 'cheerio';
-import pdf from 'pdf-parse';
+import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { MeetingSummary } from '../types';
 
 // Ensure the API_KEY is available in the serverless environment
 if (!process.env.API_KEY) {
   throw new Error("API_KEY environment variable is not set.");
 }
+
+// For serverless environments like Vercel, we must disable worker threads in pdfjs-dist.
+// This prevents it from trying to spawn a worker process, which is not supported.
+GlobalWorkerOptions.disableWorker = true;
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 const councilMeetingsUrl = 'https://www.ashevillenc.gov/government/city-council-meeting-materials/';
@@ -87,11 +91,19 @@ async function getPdfText(url: string): Promise<string> {
             throw new Error(`Failed to fetch PDF from ${url} after following redirects: ${response.status} ${response.statusText}`);
         }
         const arrayBuffer = await response.arrayBuffer();
-        const pdfBuffer = Buffer.from(arrayBuffer);
+        const pdfData = new Uint8Array(arrayBuffer);
 
-        // Using pdf-parse which is more robust
-        const data = await pdf(pdfBuffer);
-        return data.text;
+        // Using pdfjs-dist which is more robust
+        const doc = await getDocument({ data: pdfData }).promise;
+
+        let fullText = '';
+        for (let i = 1; i <= doc.numPages; i++) {
+            const page = await doc.getPage(i);
+            const textContent = await page.getTextContent();
+            const pageText = textContent.items.map(item => ('str' in item ? item.str : '')).join(' ');
+            fullText += pageText + '\n';
+        }
+        return fullText;
         
     } catch(error) {
         console.error(`Error parsing PDF from ${url}:`, error);
