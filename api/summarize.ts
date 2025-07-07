@@ -1,7 +1,7 @@
 // Vercel deploys files in the /api directory as serverless functions.
 // This function will be accessible at the `/api/summarize` endpoint.
 
-import pdf from "pdf-parse-fork-team";
+import { PdfReader } from "pdfreader";
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 import * as cheerio from 'cheerio';
@@ -59,8 +59,21 @@ async function getPdfText(url: string): Promise<string> {
             throw new Error(`Failed to fetch PDF from ${url}: ${response.statusText}`);
         }
         const arrayBuffer = await response.arrayBuffer();
-        const data = await pdf(Buffer.from(arrayBuffer));
-        return data.text;
+        const pdfBuffer = Buffer.from(arrayBuffer);
+
+        return new Promise((resolve, reject) => {
+            let content = '';
+            new PdfReader(null).parseBuffer(pdfBuffer, (err, item) => {
+                if (err) {
+                    reject(err);
+                } else if (!item) {
+                    // end of file
+                    resolve(content);
+                } else if (item.text) {
+                    content += item.text + ' ';
+                }
+            });
+        });
     } catch(error) {
         console.error(`Error parsing PDF from ${url}:`, error);
         return ""; // Return empty string on failure
