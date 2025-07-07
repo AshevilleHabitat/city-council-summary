@@ -66,17 +66,22 @@ export default async function handler(
     }
     const html = await pageResp.text();
 
-    // 2) Scrape PDF & Drive preview links
+    // 2) Scrape only direct PDF & Google Drive file preview links
     const $ = cheerio.load(html);
     const rawLinks: string[] = [];
     $('a[href]').each((_i: number, el: any) => {
       const href = ($(el).attr('href') || '').trim();
       const isPdf   = /\.pdf($|\?)/i.test(href);
-      const isDrive = /drive\.google\.com\//i.test(href);
-      if (isPdf || isDrive) rawLinks.push(href);
+      // Only include Drive file preview URLs (not folders)
+      const isDriveFile = /drive\.google\.com\/file\/d\/[A-Za-z0-9_-]+/.test(href)
+        || (/drive\.google\.com\/.*[?&]id=[A-Za-z0-9_-]+/.test(href)
+            && !/\/folders\//.test(href));
+      if (isPdf || isDriveFile) rawLinks.push(href);
     });
 
     if (!rawLinks.length) {
+      return res.status(200).json({ summary: '', message: 'No Minutes links found.' });
+    } {
       return res.status(200).json({ summary: '', message: 'No Minutes links found.' });
     }
 
