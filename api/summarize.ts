@@ -87,7 +87,7 @@ async function summarizeHousingTopics(minutesText: string): Promise<string> {
       contents: prompt,
     });
     
-    return response.text.trim();
+    return (response.text ?? '').trim();
   } catch (error) {
     console.error("Error calling Gemini API:", error);
     return `Error: Could not generate summary.`;
@@ -96,7 +96,7 @@ async function summarizeHousingTopics(minutesText: string): Promise<string> {
 
 
 export default async function handler(
-  req: VercelRequest,
+  _req: VercelRequest,
   res: VercelResponse
 ) {
   try {
