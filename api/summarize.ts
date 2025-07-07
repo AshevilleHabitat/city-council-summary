@@ -1,3 +1,4 @@
+
 // Vercel deploys files in the /api directory as serverless functions.
 // This function will be accessible at the `/api/summarize` endpoint.
 
@@ -105,6 +106,8 @@ async function getPdfText(url: string): Promise<string> {
             const pageText = textContent.items.map((item: any) => ('str' in item ? item.str : '')).join(' ');
             fullText += pageText + '\n';
         }
+        // DIAGNOSTIC LOG
+        console.log(`Extracted ${fullText.length} characters from ${url}`);
         return fullText;
         
     } catch(error) {
@@ -147,6 +150,9 @@ export default async function handler(
 ) {
   try {
     const meetingLinks = await getMeetingLinks();
+    // DIAGNOSTIC LOG
+    console.log(`Found ${meetingLinks.length} meeting links.`);
+    
     if (meetingLinks.length === 0) {
       return res.status(200).json([]);
     }
@@ -156,6 +162,9 @@ export default async function handler(
         if (!minutesText) return null;
 
         const summaryText = await summarizeHousingTopics(minutesText);
+        // DIAGNOSTIC LOG
+        console.log(`[${link.date}] Summary from AI: "${summaryText}"`);
+        
         if (summaryText.toLowerCase().trim() !== "no housing topics found." && !summaryText.startsWith("Error:")) {
             return {
                 date: link.date,
