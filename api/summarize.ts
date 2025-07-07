@@ -1,7 +1,7 @@
 // Vercel deploys files in the /api directory as serverless functions.
 // This function will be accessible at the `/api/summarize` endpoint.
 
-import pdf from "pdf-parse";
+import pdf from "pdf-parse-fork-team";
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 import * as cheerio from 'cheerio';
