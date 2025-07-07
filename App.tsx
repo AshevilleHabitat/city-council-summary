@@ -49,7 +49,7 @@ const App: React.FC = () => {
     if (isLoading && summaries.length === 0) {
       return (
         <div>
-            <p className="text-center text-gray-600 dark:text-gray-400 my-4">Fetching and analyzing live meeting minutes from ashevillenc.gov... this may take a moment.</p>
+            <p className="text-center text-gray-600 dark:text-gray-400 my-4">Fetching and analyzing minutes from all recent city public meetings... this may take a moment.</p>
             <LoadingSpinner />
         </div>
       );
