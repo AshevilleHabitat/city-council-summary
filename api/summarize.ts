@@ -23,6 +23,7 @@ const apiBaseUrl = 'https://asheville.civicclerk.com';
  * which is more robust than scraping HTML.
  */
 async function getMeetingLinks(): Promise<{ date: string, url: string }[]> {
+  console.log('Starting to fetch meeting links from CivicClerk API...');
   const links: { date: string, url: string }[] = [];
   const today = new Date();
   const daysToScan = 90; // Scan the last 3 months for meetings
@@ -41,7 +42,10 @@ async function getMeetingLinks(): Promise<{ date: string, url: string }[]> {
     
     const promise = fetch(apiUrl)
       .then(res => {
-        if (!res.ok) return null;
+        if (!res.ok) {
+          console.log(`No meetings found for ${formattedDate} (status: ${res.status})`);
+          return null;
+        }
         return res.json();
       })
       .then(meetingsData => {
@@ -60,8 +64,9 @@ async function getMeetingLinks(): Promise<{ date: string, url: string }[]> {
           }
         }
       })
-      .catch(_e => {
-        // Silently ignore errors for days with no meetings or failed fetches
+      .catch(e => {
+        // Log errors for debugging, but don't stop the whole process
+        console.error(`Error fetching or processing data for ${formattedDate}:`, e);
       });
       
     fetchPromises.push(promise);
@@ -69,9 +74,14 @@ async function getMeetingLinks(): Promise<{ date: string, url: string }[]> {
 
   await Promise.all(fetchPromises);
   
+  console.log(`Found ${links.length} total potential meeting links.`);
+  
   // Sort by date descending and take the most recent 5.
   links.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  return links.slice(0, 5);
+  const finalLinks = links.slice(0, 5);
+
+  console.log('Final links to process:', finalLinks.map(l => l.url));
+  return finalLinks;
 }
 
 async function getPdfText(url: string): Promise<string> {
@@ -93,6 +103,7 @@ async function getPdfText(url: string): Promise<string> {
             const pageText = textContent.items.map((item: any) => ('str' in item ? item.str : '')).join(' ');
             fullText += pageText + '\n';
         }
+        console.log(`Extracted ${fullText.length} characters from ${url}`);
         return fullText;
         
     } catch(error) {
@@ -121,7 +132,9 @@ async function summarizeHousingTopics(minutesText: string): Promise<string> {
       contents: prompt,
     });
     
-    return (response.text ?? '').trim();
+    const summary = (response.text ?? '').trim();
+    console.log(`Gemini API response: "${summary}"`);
+    return summary;
   } catch (error) {
     console.error("Error calling Gemini API:", error);
     return `Error: Could not generate summary.`;
@@ -137,28 +150,35 @@ export default async function handler(
     const meetingLinks = await getMeetingLinks();
     
     if (meetingLinks.length === 0) {
+      console.log('No meeting links found, returning empty array.');
       return res.status(200).json([]);
     }
 
     const summaryPromises = meetingLinks.map(async (link) => {
         const minutesText = await getPdfText(link.url);
-        if (!minutesText) return null;
+        if (!minutesText) {
+          console.log(`Skipping summary for ${link.url} due to empty text.`);
+          return null;
+        }
 
         const summaryText = await summarizeHousingTopics(minutesText);
         
         if (summaryText.toLowerCase().trim() !== "no housing topics found." && !summaryText.startsWith("Error:")) {
+            console.log(`Valid housing summary found for ${link.date}.`);
             return {
                 date: link.date,
                 summary: summaryText,
                 originalUrl: link.url,
             };
         }
+        console.log(`No valid housing summary found for ${link.date}.`);
         return null;
     });
 
     const results = await Promise.all(summaryPromises);
     const validSummaries = results.filter((s): s is MeetingSummary => s !== null);
     
+    console.log(`Returning ${validSummaries.length} valid summaries to the client.`);
     validSummaries.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
     res.setHeader('Cache-Control', 's-maxage=3600, stale-while-revalidate'); // Cache for 1 hour
