@@ -9,37 +9,57 @@ const MATERIALS_URL =
 const GEMINI_ENDPOINT =
   'https://generativelanguage.googleapis.com/v1beta2/models/text-bison-001:generateText';
 
-/** 
- * Fetches a Google Drive PDF, following redirects and confirm‐token pages 
+/**
+ * Fetches a Google Drive PDF, following redirects & confirm‐tokens,
+ * and even scraping the “download” link out of the HTML if needed.
  */
 async function fetchDrivePdf(url: string): Promise<FetchResponse> {
+  // 1) Extract the file ID from /d/<id>/ or ?id=<id>
   const idMatch =
     url.match(/\/d\/([A-Za-z0-9_-]+)\//) ||
     url.match(/[?&]id=([A-Za-z0-9_-]+)/);
   const fileId = idMatch?.[1];
-  if (!fileId) return fetch(url) as Promise<FetchResponse>;
-
-  const base = 'https://drive.google.com/uc?export=download';
-  let resp = await fetch(`${base}&id=${fileId}`, { redirect: 'manual' });
-
-  // Follow 3xx redirect
-  if (resp.status >= 300 && resp.status < 400) {
-    const loc = resp.headers.get('location');
-    if (loc) resp = await fetch(loc) as FetchResponse;
+  if (!fileId) {
+    // Not a Drive link we understand → fetch normally
+    return fetch(url);
   }
 
-  // Handle confirm token page
-  const ct = (resp.headers.get('content-type') || '').toLowerCase();
-  if (ct.includes('text/html')) {
-    const body = await resp.text();
-    const token = body.match(/confirm=([0-9A-Za-z_]+)&/)?.[1];
-    if (token) {
-      resp = await fetch(`${base}&confirm=${token}&id=${fileId}`) as FetchResponse;
+  const base = 'https://drive.google.com/uc?export=download';
+  let pdfUrl = `${base}&id=${fileId}`;
+  
+  // 2) First attempt: straightforward download (auto‐follows redirects)
+  let resp = await fetch(pdfUrl, { redirect: 'follow' });
+  let ct = (resp.headers.get('content-type') || '').toLowerCase();
+
+  // 3) If we didn't get a PDF, the body is HTML (either confirm page or preview)
+  if (!ct.includes('pdf') && !ct.includes('octet-stream')) {
+    const html = await resp.text();
+
+    // 3a) Look for a confirm token in the HTML
+    const tokenMatch = html.match(/confirm=([0-9A-Za-z_]+)&amp;id=/) 
+                    || html.match(/confirm=([0-9A-Za-z_]+)&id=/);
+    if (tokenMatch) {
+      // Rebuild the download URL with the confirm token
+      pdfUrl = `${base}&confirm=${tokenMatch[1]}&id=${fileId}`;
+      resp = await fetch(pdfUrl, { redirect: 'follow' });
+      ct = (resp.headers.get('content-type') || '').toLowerCase();
+    }
+
+    // 3b) If we still don’t have a PDF, scrape for the actual download link
+    if (!ct.includes('pdf') && !ct.includes('octet-stream')) {
+      // Find something like: href="/uc?export=download&amp;confirm=XYZ&id=FILEID"
+      const linkMatch = html.match(/href="(\/uc\?export=download(&amp;|&)[^"]+)"/);
+      if (linkMatch) {
+        // Unescape &amp; → &
+        const downloadPath = linkMatch[1].replace(/&amp;/g, '&');
+        resp = await fetch(`https://drive.google.com${downloadPath}`, { redirect: 'follow' });
+      }
     }
   }
 
   return resp;
 }
+
 
 export default async function handler(
   _req: VercelRequest,
