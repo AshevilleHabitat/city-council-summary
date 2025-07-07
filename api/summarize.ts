@@ -1,11 +1,9 @@
 // api/summarize.ts
 
+import pdfParse from 'pdf-parse':
 import { VercelRequest, VercelResponse } from '@vercel/node';
 import fetch from 'node-fetch';
 import * as cheerio from 'cheerio';
-import { promises as fs } from 'fs';
-import path from 'path';
-import { createRequire } from 'module';
 
 const MATERIALS_URL =
   'https://www.ashevillenc.gov/government/city-council-meeting-materials/';
