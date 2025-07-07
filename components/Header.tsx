@@ -16,7 +16,7 @@ const Header: React.FC<HeaderProps> = ({ onRefresh, isLoading }) => {
               Asheville City Council Housing Updates
             </h1>
             <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-              AI-powered summaries of housing discussions from meeting minutes.
+              Your AI guide to Asheville's housing discussions.
             </p>
           </div>
           <button

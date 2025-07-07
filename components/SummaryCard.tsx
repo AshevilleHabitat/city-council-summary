@@ -14,8 +14,10 @@ const SummaryCard: React.FC<SummaryCardProps> = ({ summaryData }) => {
     timeZone: 'UTC',
   });
 
+  const isHousingTopicFound = !summaryData.summary.toLowerCase().includes('no housing topics found');
+
   return (
-    <div className="bg-white dark:bg-gray-800 shadow-lg rounded-xl overflow-hidden transform hover:scale-[1.02] transition-transform duration-300 ease-in-out">
+    <div className={`bg-white dark:bg-gray-800 shadow-lg rounded-xl overflow-hidden transform hover:scale-[1.02] transition-transform duration-300 ease-in-out ${!isHousingTopicFound ? 'opacity-60' : ''}`}>
       <div className="p-6">
         <div className="flex items-baseline justify-between mb-4">
           <h3 className="font-bold text-xl text-gray-900 dark:text-white">{formattedDate}</h3>
@@ -29,9 +31,13 @@ const SummaryCard: React.FC<SummaryCardProps> = ({ summaryData }) => {
             Source PDF
           </a>
         </div>
-        <p className="text-gray-700 dark:text-gray-300 leading-relaxed whitespace-pre-wrap">
-          {summaryData.summary}
-        </p>
+        <div className="text-gray-700 dark:text-gray-300 leading-relaxed whitespace-pre-wrap">
+          {isHousingTopicFound ? (
+            <p>{summaryData.summary}</p>
+          ) : (
+            <p className="italic text-gray-500 dark:text-gray-400">No housing-related topics were discussed in this meeting.</p>
+          )}
+        </div>
       </div>
     </div>
   );

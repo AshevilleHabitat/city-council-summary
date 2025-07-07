@@ -19,8 +19,8 @@ const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 const apiBaseUrl = 'https://asheville.civicclerk.com';
 
 /**
- * Fetches meeting links by calling the official CivicClerk JSON API,
- * which is more robust than scraping HTML.
+ * Fetches meeting links by calling the official CivicClerk JSON API.
+ * This is more robust than scraping HTML.
  */
 async function getMeetingLinks(): Promise<{ date: string, url: string }[]> {
   const links: { date: string, url: string }[] = [];
@@ -41,20 +41,15 @@ async function getMeetingLinks(): Promise<{ date: string, url: string }[]> {
     
     const promise = fetch(apiUrl)
       .then(res => {
-        if (!res.ok) {
-          return null;
-        }
+        if (!res.ok) return null;
         const contentType = res.headers.get('content-type');
-        if (!contentType || !contentType.includes('application/json')) {
-            return null;
-        }
+        if (!contentType || !contentType.includes('application/json')) return null;
         return res.json();
       })
       .then(meetingsData => {
         if (Array.isArray(meetingsData)) {
           for (const meeting of meetingsData) {
-            // No longer filtering by BodyName to include all committees
-            const minutesLink = meeting.Links.find((l: any) => l.FileTypeName.toLowerCase() === 'minutes' && l.Url);
+            const minutesLink = meeting.Links.find((l: any) => l.FileTypeName.toLowerCase().includes('minutes') && l.Url);
             if (minutesLink) {
               links.push({
                 date: formattedDate,
@@ -74,10 +69,8 @@ async function getMeetingLinks(): Promise<{ date: string, url: string }[]> {
   await Promise.all(fetchPromises);
   
   links.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  // Increased limit to show more recent meetings
-  const finalLinks = links.slice(0, 15);
-
-  return finalLinks;
+  // No longer slicing to a limit, process all found meetings in the date range.
+  return links;
 }
 
 async function getPdfText(url: string): Promise<string> {
@@ -97,7 +90,7 @@ async function getPdfText(url: string): Promise<string> {
             const page = await doc.getPage(i);
             const textContent = await page.getTextContent();
             const pageText = textContent.items.map((item: any) => ('str' in item ? item.str : '')).join(' ');
-            fullText += pageText + '\n';
+            fullText += pageText + '\n\n'; // Add double newline for paragraph separation
         }
         return fullText;
         
@@ -107,17 +100,53 @@ async function getPdfText(url: string): Promise<string> {
     }
 }
 
+/**
+ * Intelligently extracts relevant excerpts from the minutes and sends only that to the AI.
+ * This avoids truncation issues and provides better context to the model.
+ */
 async function summarizeHousingTopics(minutesText: string): Promise<string> {
-    const prompt = `
+  if (!minutesText || minutesText.trim().length === 0) {
+    return "No housing topics found.";
+  }
+  
+  const keywords = [
+      'housing', 'affordable housing', 'homelessness', 'homeless', 'zoning', 'rezoning',
+      'development', 'land use', 'gentrification', 'shelter', 'rent', 'property',
+      'CDBG', 'HOME', 'apartment', 'condominium', 'multi-family', 'residential'
+  ];
+
+  const paragraphs = minutesText.split(/\n\s*\n/); // Split by one or more empty lines
+  const relevantExcerpts: string[] = [];
+  const MAX_EXCERPT_LENGTH = 35000; // Limit total excerpt length
+  let currentLength = 0;
+
+  for (const para of paragraphs) {
+    const lowerPara = para.toLowerCase();
+    if (keywords.some(keyword => lowerPara.includes(keyword))) {
+      if (currentLength + para.length > MAX_EXCERPT_LENGTH) {
+        break; // Stop if we're over the length budget
+      }
+      relevantExcerpts.push(para);
+      currentLength += para.length;
+    }
+  }
+
+  if (relevantExcerpts.length === 0) {
+    return "No housing topics found.";
+  }
+
+  const excerptsText = relevantExcerpts.join("\n---\n");
+
+  const prompt = `
     You are an expert assistant specialized in analyzing municipal government documents.
-    Your task is to review the following text from the Asheville City Council meeting minutes and extract a concise summary of any discussions, debates, or decisions related to housing, affordable housing, homelessness, zoning for residential areas, or property development for residential purposes.
+    Your task is to review the following excerpts from the Asheville City Council meeting minutes and extract a concise summary of any discussions, debates, or decisions related to housing.
 
-    If the minutes contain information on these topics, please provide a clear, neutral summary of 1-3 sentences.
-    If the minutes do not contain any mention of these topics, your entire response must be exactly: "No housing topics found."
+    If the excerpts contain information on these topics, please provide a clear, neutral summary of 1-3 sentences.
+    If the excerpts do not contain any mention of these topics, your entire response must be exactly: "No housing topics found."
 
-    Here are the minutes:
+    Here are the relevant excerpts:
     ---
-    ${minutesText.substring(0, 15000)} 
+    ${excerptsText}
     ---
   `;
 
@@ -128,13 +157,12 @@ async function summarizeHousingTopics(minutesText: string): Promise<string> {
     });
     
     const summary = (response.text ?? '').trim();
-    return summary;
+    return summary || "Could not generate summary from excerpts.";
   } catch (error) {
     console.error("Error calling Gemini API:", error);
     return `Error: Could not generate summary.`;
   }
 }
-
 
 export default async function handler(
   _req: VercelRequest,
@@ -155,8 +183,6 @@ export default async function handler(
 
         const summaryText = await summarizeHousingTopics(minutesText);
         
-        // Don't filter out "No housing topics found." Send it to the frontend.
-        // Only filter out actual errors.
         if (summaryText.startsWith("Error:")) {
             return null;
         }
