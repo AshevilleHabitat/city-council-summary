@@ -19,26 +19,66 @@ const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 const apiBaseUrl = 'https://asheville.civicclerk.com';
 
 /**
- * Fetches meeting links by calling the official CivicClerk JSON API.
- * This is more robust than scraping HTML.
+ * Fetches meeting links using a robust, multi-step process.
+ * 1. Fetches all meetings for the current and previous year to be resilient against server clock issues.
+ * 2. Filters for meetings that have minutes available.
+ * 3. Fetches details for those specific meetings to get the minutes URL.
+ * 4. Limits processing to the 30 most recent meetings.
  */
 async function getMeetingLinks(): Promise<{ date: string, url: string }[]> {
   const links: { date: string, url: string }[] = [];
-  const today = new Date();
-  const daysToScan = 90; // Scan the last 3 months for meetings
-  const fetchPromises: Promise<void>[] = [];
+  const currentYear = new Date().getFullYear();
+  // Scan current and previous year to be robust against clock issues and find recent meetings at year-end.
+  const yearsToScan = [currentYear, currentYear - 1];
+  const meetingDatesWithMinutes = new Set<string>();
 
-  for (let i = 0; i < daysToScan; i++) {
-    const dateToScan = new Date(today);
-    dateToScan.setDate(today.getDate() - i);
-    
-    const year = dateToScan.getFullYear();
-    const month = String(dateToScan.getMonth() + 1).padStart(2, '0');
-    const day = String(dateToScan.getDate()).padStart(2, '0');
-    const formattedDate = `${year}-${month}-${day}`;
-    
+  // Step 1: Find all dates in the scan range that have meetings with minutes.
+  const filterPromises = yearsToScan.map(year => {
+    const fromDate = `${year}-01-01T00:00:00`;
+    const toDate = `${year}-12-31T23:59:59`;
+    const filterApiUrl = `${apiBaseUrl}/Web/Api/Meetings/Filter`;
+
+    return fetch(filterApiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        EventBodyId: null,
+        FromDate: fromDate,
+        ToDate: toDate,
+      })
+    })
+    .then(res => {
+      if (!res.ok) return null;
+      return res.json();
+    })
+    .then(meetingsOfYear => {
+      if (Array.isArray(meetingsOfYear)) {
+        for (const meeting of meetingsOfYear) {
+          if (meeting.HasMinutes && meeting.Date) {
+            // Date is like "2024-06-25T17:00:00", we just need the date part.
+            const meetingDate = meeting.Date.split('T')[0];
+            meetingDatesWithMinutes.add(meetingDate);
+          }
+        }
+      }
+    })
+    .catch(e => {
+      console.error(`Error fetching filtered meetings for year ${year}:`, e);
+    });
+  });
+
+  await Promise.all(filterPromises);
+
+  if (meetingDatesWithMinutes.size === 0) {
+    console.log("Found no meetings with minutes after scanning years:", yearsToScan);
+    return [];
+  }
+
+  // Step 2: For each unique date, fetch the detailed meeting info to get the minutes URL.
+  const detailFetchPromises: Promise<void>[] = [];
+  for (const formattedDate of Array.from(meetingDatesWithMinutes)) {
     const apiUrl = `${apiBaseUrl}/web/api/Meetings?date=${formattedDate}`;
-    
+
     const promise = fetch(apiUrl)
       .then(res => {
         if (!res.ok) return null;
@@ -49,7 +89,7 @@ async function getMeetingLinks(): Promise<{ date: string, url: string }[]> {
       .then(meetingsData => {
         if (Array.isArray(meetingsData)) {
           for (const meeting of meetingsData) {
-            const minutesLink = meeting.Links.find((l: any) => l.FileTypeName.toLowerCase().includes('minutes') && l.Url);
+            const minutesLink = meeting.Links.find((l: any) => l.FileTypeName?.toLowerCase().includes('minutes') && l.Url);
             if (minutesLink) {
               links.push({
                 date: formattedDate,
@@ -60,18 +100,20 @@ async function getMeetingLinks(): Promise<{ date: string, url: string }[]> {
         }
       })
       .catch(e => {
-        console.error(`Error fetching or processing data for ${formattedDate}:`, e);
+        console.error(`Error fetching meeting details for ${formattedDate}:`, e);
       });
-      
-    fetchPromises.push(promise);
+
+    detailFetchPromises.push(promise);
   }
 
-  await Promise.all(fetchPromises);
-  
+  await Promise.all(detailFetchPromises);
+
   links.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  // No longer slicing to a limit, process all found meetings in the date range.
-  return links;
+
+  // Take the most recent 30 meetings to analyze.
+  return links.slice(0, 30);
 }
+
 
 async function getPdfText(url: string): Promise<string> {
     try {
