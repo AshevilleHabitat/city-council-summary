@@ -1,3 +1,4 @@
+
 // Vercel deploys files in the /api directory as serverless functions.
 // This function will be accessible at the `/api/summarize` endpoint.
 
@@ -25,24 +26,41 @@ async function getMeetingLinks(): Promise<{ date: string, url: string }[]> {
     const $ = cheerio.load(html);
     const links: { date: string, url: string }[] = [];
 
-    // Find links within the relevant section, assuming a structure
-    $('.item-link').each((_i, element) => {
-      const href = $(element).attr('href');
-      const text = $(element).text().trim();
+    // The website structure has changed. This new selector targets the current layout.
+    // It finds each meeting "card", extracts the title for the date, and finds the specific "Minutes" PDF link.
+    $('div.card').each((_i, element) => {
+      const card = $(element);
+      const title = card.find('h3.card-title').text().trim();
+      
+      // Find the anchor tag that specifically says "Minutes"
+      const minutesLink = card.find('p.card-text a').filter((_idx, linkEl) => {
+          return $(linkEl).text().trim().toLowerCase() === 'minutes';
+      });
 
-      // Basic filter for links that seem to be meeting minutes
-      if (href && (href.endsWith('.pdf')) && text.toLowerCase().includes('minutes')) {
-        // Attempt to parse a date from the text, e.g., "07.23.24 Regular Meeting Minutes"
-        const dateMatch = text.match(/(\d{1,2})\.(\d{1,2})\.(\d{2})/);
-        if (dateMatch) {
-            const [, month, day, year] = dateMatch;
-            const fullYear = `20${year}`;
-            const formattedDate = `${fullYear}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
-            const fullUrl = new URL(href, councilMeetingsUrl).toString();
-            links.push({ date: formattedDate, url: fullUrl });
+      if (minutesLink.length > 0) {
+        const href = minutesLink.attr('href');
+        
+        // Parse date from a format like "July 23, 2024 City Council..."
+        const dateMatch = title.match(/^(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}/i);
+
+        if (href && href.endsWith('.pdf') && dateMatch) {
+            const dateStr = dateMatch[0];
+            const dateObj = new Date(dateStr);
+            
+            if (!isNaN(dateObj.getTime())) {
+                const year = dateObj.getFullYear();
+                const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+                const day = String(dateObj.getDate()).padStart(2, '0');
+                const formattedDate = `${year}-${month}-${day}`;
+                const fullUrl = new URL(href, councilMeetingsUrl).toString();
+                links.push({ date: formattedDate, url: fullUrl });
+            }
         }
       }
     });
+    
+    // Sort by date descending to get the most recent ones first.
+    links.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
     // Limit to the most recent 5 for this proof-of-concept to manage execution time
     return links.slice(0, 5);
