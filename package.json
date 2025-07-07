@@ -4,24 +4,24 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "esbuild index.tsx --bundle --outfile=dist/bundle.js --jsx=automatic && cp index.html dist/index.html",
-    "postinstall": "mkdir -p node_modules/pdf-parse/test/data && echo '%PDF-1.1\n%âãÏÓ' > node_modules/pdf-parse/test/data/05-versions-space.pdf"
+    "prepare":"patch-package",
+    "build": "esbuild index.tsx --bundle --outfile=dist/bundle.js --jsx=automatic && cp index.html dist/index.html"
   },
   "dependencies": {
     "@google/genai": "^1.8.0",
     "@napi-rs/canvas": "^0.1.53",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
     "cheerio": "^1.0.0-rc.12",
+    "node-fetch": "^3.3.2",
     "pdf-parse": "^1.1.1",
-    "node-fetch": "^3.3.2"
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
   },
   "devDependencies": {
     "@types/node": "^20.12.12",
+    "@types/pdf-parse": "^1.1.4",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "@vercel/node": "^5.3.3",
-    "@types/pdf-parse": "^1.1.4",
     "esbuild": "^0.20.2",
     "typescript": "^5.4.5"
   }
