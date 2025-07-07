@@ -1,0 +1,6 @@
+{
+  "name": "Asheville City Council Housing Updates",
+  "description": "An application that uses AI to summarize housing-related topics from Asheville, NC City Council meeting minutes. It checks for new meeting materials and provides a chronological overview of discussions on housing.",
+  "requestFramePermissions": [],
+  "prompt": ""
+}
