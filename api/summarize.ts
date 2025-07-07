@@ -10,56 +10,41 @@ const GEMINI_ENDPOINT =
   'https://generativelanguage.googleapis.com/v1beta2/models/text-bison-001:generateText';
 
 /**
- * Fetches a Google Drive PDF, following redirects & confirm‐tokens,
- * and even scraping the “download” link out of the HTML if needed.
+ * Fetches a Google Drive PDF by:
+ *  1. Hitting the uc?export=download endpoint
+ *  2. If it returns HTML, scraping out the #uc-download-link href
+ *     (the “download anyway” link), then re-fetching that.
  */
 async function fetchDrivePdf(url: string): Promise<FetchResponse> {
-  // 1) Extract the file ID from /d/<id>/ or ?id=<id>
+  // 1) Extract fileId
   const idMatch =
     url.match(/\/d\/([A-Za-z0-9_-]+)\//) ||
     url.match(/[?&]id=([A-Za-z0-9_-]+)/);
   const fileId = idMatch?.[1];
   if (!fileId) {
-    // Not a Drive link we understand → fetch normally
     return fetch(url);
   }
 
-  const base = 'https://drive.google.com/uc?export=download';
-  let pdfUrl = `${base}&id=${fileId}`;
-  
-  // 2) First attempt: straightforward download (auto‐follows redirects)
-  let resp = await fetch(pdfUrl, { redirect: 'follow' });
+  const baseUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
+  let resp = await fetch(baseUrl, { redirect: 'follow' });
   let ct = (resp.headers.get('content-type') || '').toLowerCase();
 
-  // 3) If we didn't get a PDF, the body is HTML (either confirm page or preview)
+  // 2) If we got HTML instead of a PDF, parse out the real download link
   if (!ct.includes('pdf') && !ct.includes('octet-stream')) {
     const html = await resp.text();
+    const $ = cheerio.load(html);
 
-    // 3a) Look for a confirm token in the HTML
-    const tokenMatch = html.match(/confirm=([0-9A-Za-z_]+)&amp;id=/) 
-                    || html.match(/confirm=([0-9A-Za-z_]+)&id=/);
-    if (tokenMatch) {
-      // Rebuild the download URL with the confirm token
-      pdfUrl = `${base}&confirm=${tokenMatch[1]}&id=${fileId}`;
-      resp = await fetch(pdfUrl, { redirect: 'follow' });
-      ct = (resp.headers.get('content-type') || '').toLowerCase();
-    }
-
-    // 3b) If we still don’t have a PDF, scrape for the actual download link
-    if (!ct.includes('pdf') && !ct.includes('octet-stream')) {
-      // Find something like: href="/uc?export=download&amp;confirm=XYZ&id=FILEID"
-      const linkMatch = html.match(/href="(\/uc\?export=download(&amp;|&)[^"]+)"/);
-      if (linkMatch) {
-        // Unescape &amp; → &
-        const downloadPath = linkMatch[1].replace(/&amp;/g, '&');
-        resp = await fetch(`https://drive.google.com${downloadPath}`, { redirect: 'follow' });
-      }
+    // Try the “download anyway” link
+    const dlPath = $('a#uc-download-link').attr('href');
+    if (dlPath) {
+      // href is something like "/uc?export=download&confirm=XYZ&id=FILEID"
+      const downloadUrl = 'https://drive.google.com' + dlPath.replace(/&amp;/g, '&');
+      resp = await fetch(downloadUrl, { redirect: 'follow' });
     }
   }
 
   return resp;
 }
-
 
 export default async function handler(
   _req: VercelRequest,
@@ -71,26 +56,20 @@ export default async function handler(
   }
 
   try {
-    // 1) Fetch the materials page
+    // 1) Load the materials page
     const pageResp = await fetch(MATERIALS_URL);
-    if (!pageResp.ok) {
-      throw new Error(`Failed to fetch materials page: ${pageResp.status}`);
-    }
+    if (!pageResp.ok) throw new Error(`Fetch failed: ${pageResp.status}`);
     const html = await pageResp.text();
 
-    // 2) Scrape PDF & Drive-preview links
+    // 2) Scrape only .pdf & Drive file-preview links
     const $ = cheerio.load(html);
     const rawLinks: string[] = [];
     $('a[href]').each((_i: number, el: any) => {
       const href = ($(el).attr('href') || '').trim();
       const isPdf = /\.pdf($|\?)/i.test(href);
       const isDriveFile =
-        /drive\.google\.com\/file\/d\/[A-Za-z0-9_-]+/.test(href) ||
-        (/drive\.google\.com\/.*[?&]id=[A-Za-z0-9_-]+/.test(href) &&
-         !/\/folders\//.test(href));
-      if (isPdf || isDriveFile) {
-        rawLinks.push(href);
-      }
+        /drive\.google\.com\/file\/d\/[A-Za-z0-9_-]+/.test(href);
+      if (isPdf || isDriveFile) rawLinks.push(href);
     });
 
     if (!rawLinks.length) {
@@ -99,7 +78,7 @@ export default async function handler(
         .json({ summaries: [], message: 'No Minutes links found.' });
     }
 
-    // 3) Download & parse PDFs, extract "housing"
+    // 3) Download & parse each PDF for “housing”
     let collected = '';
     for (const link of rawLinks) {
       try {
@@ -111,16 +90,14 @@ export default async function handler(
           console.warn(`Skipping ${link}: HTTP ${resp.status}`);
           continue;
         }
-
-        const contentType = (resp.headers.get('content-type') || '').toLowerCase();
-        if (!contentType.includes('pdf') && !contentType.includes('octet-stream')) {
-          console.warn(`Skipping ${link}: content-type ${contentType}`);
+        const ct = (resp.headers.get('content-type') || '').toLowerCase();
+        if (!ct.includes('pdf') && !ct.includes('octet-stream')) {
+          console.warn(`Skipping ${link}: content-type ${ct}`);
           continue;
         }
 
         const buffer = Buffer.from(await resp.arrayBuffer());
         const { text } = await pdfParse(buffer);
-
         text
           .split(/\r?\n{2,}/)
           .filter((p: string) => /housing/i.test(p))
@@ -150,7 +127,7 @@ export default async function handler(
     const data = (await geminiResp.json()) as { candidates?: { output: string }[] };
     const summary = data.candidates?.[0]?.output || 'No summary returned.';
 
-    // 5) Return summaries array
+    // 5) Return an array of summaries
     return res.status(200).json({ summaries: [summary] });
   } catch (err: any) {
     console.error('🚨 handler error:', err);
