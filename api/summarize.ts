@@ -11,35 +11,50 @@ const GEMINI_ENDPOINT =
 
 /**
  * Fetches a Google Drive PDF by:
- *  1. Hitting the uc?export=download endpoint
- *  2. If it returns HTML, scraping out the #uc-download-link href
- *     (the “download anyway” link), then re-fetching that.
+ *  1. Using a browser-like User-Agent on docs.google.com
+ *  2. Auto-following redirects to the binary
+ *  3. If HTML is returned, scraping out the #uc-download-link
  */
 async function fetchDrivePdf(url: string): Promise<FetchResponse> {
-  // 1) Extract fileId
+  const REAL_UA =
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ' +
+    'AppleWebKit/537.36 (KHTML, like Gecko) ' +
+    'Chrome/115.0.0.0 Safari/537.36';
+
+  // 1) Extract the file ID
   const idMatch =
     url.match(/\/d\/([A-Za-z0-9_-]+)\//) ||
     url.match(/[?&]id=([A-Za-z0-9_-]+)/);
   const fileId = idMatch?.[1];
   if (!fileId) {
-    return fetch(url);
+    // Not a Drive link we understand, fetch normally with UA
+    return fetch(url, {
+      headers: { 'User-Agent': REAL_UA }
+    });
   }
 
-  const baseUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
-  let resp = await fetch(baseUrl, { redirect: 'follow' });
-  let ct = (resp.headers.get('content-type') || '').toLowerCase();
+  // 2) Hit the docs.google.com download endpoint
+  const baseUrl = `https://docs.google.com/uc?export=download&id=${fileId}`;
+  let resp = await fetch(baseUrl, {
+    redirect: 'follow',
+    headers: {
+      'User-Agent': REAL_UA,
+      'Accept': 'application/pdf,application/octet-stream,*/*',
+    },
+  });
 
-  // 2) If we got HTML instead of a PDF, parse out the real download link
+  // 3) If we didn’t get a PDF, parse out the #uc-download-link
+  const ct = (resp.headers.get('content-type') || '').toLowerCase();
   if (!ct.includes('pdf') && !ct.includes('octet-stream')) {
     const html = await resp.text();
     const $ = cheerio.load(html);
-
-    // Try the “download anyway” link
-    const dlPath = $('a#uc-download-link').attr('href');
-    if (dlPath) {
-      // href is something like "/uc?export=download&confirm=XYZ&id=FILEID"
-      const downloadUrl = 'https://drive.google.com' + dlPath.replace(/&amp;/g, '&');
-      resp = await fetch(downloadUrl, { redirect: 'follow' });
+    const dlHref = $('a#uc-download-link').attr('href');
+    if (dlHref) {
+      const downloadUrl = 'https://docs.google.com' + dlHref.replace(/&amp;/g, '&');
+      resp = await fetch(downloadUrl, {
+        redirect: 'follow',
+        headers: { 'User-Agent': REAL_UA },
+      });
     }
   }
 
@@ -56,19 +71,20 @@ export default async function handler(
   }
 
   try {
-    // 1) Load the materials page
+    // 1) Fetch materials page
     const pageResp = await fetch(MATERIALS_URL);
-    if (!pageResp.ok) throw new Error(`Fetch failed: ${pageResp.status}`);
+    if (!pageResp.ok) {
+      throw new Error(`Failed to fetch materials page: ${pageResp.status}`);
+    }
     const html = await pageResp.text();
 
-    // 2) Scrape only .pdf & Drive file-preview links
+    // 2) Scrape PDF & Drive links
     const $ = cheerio.load(html);
     const rawLinks: string[] = [];
     $('a[href]').each((_i: number, el: any) => {
       const href = ($(el).attr('href') || '').trim();
       const isPdf = /\.pdf($|\?)/i.test(href);
-      const isDriveFile =
-        /drive\.google\.com\/file\/d\/[A-Za-z0-9_-]+/.test(href);
+      const isDriveFile = /drive\.google\.com\/file\/d\/[A-Za-z0-9_-]+/.test(href);
       if (isPdf || isDriveFile) rawLinks.push(href);
     });
 
@@ -90,14 +106,16 @@ export default async function handler(
           console.warn(`Skipping ${link}: HTTP ${resp.status}`);
           continue;
         }
-        const ct = (resp.headers.get('content-type') || '').toLowerCase();
-        if (!ct.includes('pdf') && !ct.includes('octet-stream')) {
-          console.warn(`Skipping ${link}: content-type ${ct}`);
+
+        const contentType = (resp.headers.get('content-type') || '').toLowerCase();
+        if (!contentType.includes('pdf') && !contentType.includes('octet-stream')) {
+          console.warn(`Skipping ${link}: content-type ${contentType}`);
           continue;
         }
 
         const buffer = Buffer.from(await resp.arrayBuffer());
         const { text } = await pdfParse(buffer);
+
         text
           .split(/\r?\n{2,}/)
           .filter((p: string) => /housing/i.test(p))
@@ -127,7 +145,7 @@ export default async function handler(
     const data = (await geminiResp.json()) as { candidates?: { output: string }[] };
     const summary = data.candidates?.[0]?.output || 'No summary returned.';
 
-    // 5) Return an array of summaries
+    // 5) Return summaries array
     return res.status(200).json({ summaries: [summary] });
   } catch (err: any) {
     console.error('🚨 handler error:', err);
