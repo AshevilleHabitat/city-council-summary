@@ -2,7 +2,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import fetch, { Response as FetchResponse } from 'node-fetch';
 import * as cheerio from 'cheerio';
-import type { Element } from 'cheerio';
 import pdfParse from 'pdf-parse';
 
 const MATERIALS_URL =
@@ -14,7 +13,6 @@ const GEMINI_ENDPOINT =
  * Fetches a Google Drive PDF, handling the confirm token for large files.
  */
 async function fetchDrivePdf(url: string): Promise<FetchResponse> {
-  // Extract file ID
   const idMatch =
     url.match(/\/d\/([A-Za-z0-9_-]+)\//) || url.match(/[?&]id=([A-Za-z0-9_-]+)/);
   const fileId = idMatch ? idMatch[1] : null;
@@ -26,13 +24,11 @@ async function fetchDrivePdf(url: string): Promise<FetchResponse> {
   let resp: FetchResponse = await fetch(`${base}&id=${fileId}`, { redirect: 'manual' });
   const ct = (resp.headers.get('content-type') || '').toLowerCase();
 
-  // If HTML, extract confirm token and re-fetch
   if (ct.includes('text/html')) {
     const body = await resp.text();
     const tokenMatch = body.match(/confirm=([0-9A-Za-z_]+)&/);
     if (tokenMatch) {
-      const token = tokenMatch[1];
-      resp = await fetch(`${base}&confirm=${token}&id=${fileId}`) as FetchResponse;
+      resp = await fetch(`${base}&confirm=${tokenMatch[1]}&id=${fileId}`) as FetchResponse;
     }
   }
   return resp;
@@ -48,51 +44,55 @@ export default async function handler(
   }
 
   try {
-    // Fetch materials page
+    // 1) Fetch the materials page
     const pageResp = await fetch(MATERIALS_URL);
-    if (!pageResp.ok) throw new Error(`Fetch failed: ${pageResp.status}`);
+    if (!pageResp.ok) {
+      throw new Error(`Fetch failed: ${pageResp.status}`);
+    }
     const html = await pageResp.text();
 
-    // Scrape PDF & Drive links
+    // 2) Scrape PDF & Drive preview links
     const $ = cheerio.load(html);
     const rawLinks: string[] = [];
-    $('a[href]').each((_: any, a: Element) => {
-      const href = ($(a).attr('href') || '').trim();
-      const isPdf = /\.pdf($|\?)/i.test(href);
+    $('a[href]').each((index: number, el: any) => {
+      const href = ($(el).attr('href') || '').trim();
+      const isPdf  = /\.pdf($|\?)/i.test(href);
       const isDrive = /drive\.google\.com\//i.test(href);
-      if (isPdf || isDrive) rawLinks.push(href);
+      if (isPdf || isDrive) {
+        rawLinks.push(href);
+      }
     });
 
     if (!rawLinks.length) {
       return res.status(200).json({ summary: '', message: 'No Minutes links found.' });
     }
 
-    // Normalize URLs
-    const pdfUrls = rawLinks.map(link => link);
-
-    // Download & parse
+    // 3) Download & parse
     let collected = '';
-    for (const url of pdfUrls) {
+    for (const link of rawLinks) {
       try {
-        const resp = url.includes('drive.google.com')
-          ? await fetchDrivePdf(url)
-          : (await fetch(url));
+        const resp = link.includes('drive.google.com')
+          ? await fetchDrivePdf(link)
+          : await fetch(link);
         if (!resp.ok) {
-          console.warn(`Skip ${url}: HTTP ${resp.status}`);
+          console.warn(`Skipping ${link}: HTTP ${resp.status}`);
           continue;
         }
         const contentType = (resp.headers.get('content-type') || '').toLowerCase();
         if (!contentType.includes('pdf') && !contentType.includes('octet-stream')) {
-          console.warn(`Skip ${url}: content-type ${contentType}`);
+          console.warn(`Skipping ${link}: content-type ${contentType}`);
           continue;
         }
         const buffer = Buffer.from(await resp.arrayBuffer());
         const { text } = await pdfParse(buffer);
-        text.split(/\r?\n{2,}/).filter((p: string) => /housing/i.test(p)).forEach((p: string) => {
-          collected += p.trim() + '\n\n';
-        });
+        text
+          .split(/\r?\n{2,}/)
+          .filter((p: string) => /housing/i.test(p))
+          .forEach((p: string) => {
+            collected += p.trim() + '\n\n';
+          });
       } catch (err: any) {
-        console.warn(`Parse error ${url}: ${err.message}`);
+        console.warn(`Error parsing ${link}: ${err.message}`);
       }
     }
 
@@ -100,18 +100,22 @@ export default async function handler(
       return res.status(200).json({ summary: '', message: 'No housing mentions found.' });
     }
 
-    // Summarize with Gemini
+    // 4) Summarize with Gemini
     const geminiResp = await fetch(`${GEMINI_ENDPOINT}?key=${apiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt: { text: `Summarize housing content:\n\n${collected}` }, temperature: 0.2 }),
+      body: JSON.stringify({
+        prompt: { text: `Summarize housing content:\n\n${collected}` },
+        temperature: 0.2,
+      }),
     });
     const data = (await geminiResp.json()) as { candidates?: { output: string }[] };
     const summary = data.candidates?.[0]?.output || 'No summary returned.';
 
     return res.status(200).json({ summary });
+
   } catch (err: any) {
-    console.error(err);
+    console.error('🚨 handler error:', err);
     return res.status(500).json({ error: err.message });
   }
 }
