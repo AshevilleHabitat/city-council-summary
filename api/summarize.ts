@@ -10,55 +10,33 @@ const GEMINI_ENDPOINT =
   'https://generativelanguage.googleapis.com/v1beta2/models/text-bison-001:generateText';
 
 /**
- * Fetches a Google Drive PDF by:
- *  1. Using a browser-like User-Agent on docs.google.com
- *  2. Auto-following redirects to the binary
- *  3. If HTML is returned, scraping out the #uc-download-link
+ * Always fetches the real PDF from Google Drive the same way your browser does.
  */
-async function fetchDrivePdf(url: string): Promise<FetchResponse> {
-  const REAL_UA =
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ' +
-    'AppleWebKit/537.36 (KHTML, like Gecko) ' +
-    'Chrome/115.0.0.0 Safari/537.36';
-
-  // 1) Extract the file ID
+async function fetchDrivePdf(link: string): Promise<FetchResponse> {
+  // 1) Extract the fileId
   const idMatch =
-    url.match(/\/d\/([A-Za-z0-9_-]+)\//) ||
-    url.match(/[?&]id=([A-Za-z0-9_-]+)/);
+    link.match(/\/d\/([A-Za-z0-9_-]+)\//) ||
+    link.match(/[?&]id=([A-Za-z0-9_-]+)/);
   const fileId = idMatch?.[1];
   if (!fileId) {
-    // Not a Drive link we understand, fetch normally with UA
-    return fetch(url, {
-      headers: { 'User-Agent': REAL_UA }
-    });
+    // Not a Drive URL we recognize, fall back to normal fetch
+    return fetch(link, { redirect: 'follow' });
   }
 
-  // 2) Hit the docs.google.com download endpoint
-  const baseUrl = `https://docs.google.com/uc?export=download&id=${fileId}`;
-  let resp = await fetch(baseUrl, {
+  // 2) Build the direct-download URL you tested in your browser
+  const downloadUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
+
+  // 3) Fetch it with redirect-following and a browser UA
+  return fetch(downloadUrl, {
     redirect: 'follow',
     headers: {
-      'User-Agent': REAL_UA,
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ' +
+        'AppleWebKit/537.36 (KHTML, like Gecko) ' +
+        'Chrome/115.0.0.0 Safari/537.36',
       'Accept': 'application/pdf,application/octet-stream,*/*',
     },
   });
-
-  // 3) If we didn’t get a PDF, parse out the #uc-download-link
-  const ct = (resp.headers.get('content-type') || '').toLowerCase();
-  if (!ct.includes('pdf') && !ct.includes('octet-stream')) {
-    const html = await resp.text();
-    const $ = cheerio.load(html);
-    const dlHref = $('a#uc-download-link').attr('href');
-    if (dlHref) {
-      const downloadUrl = 'https://docs.google.com' + dlHref.replace(/&amp;/g, '&');
-      resp = await fetch(downloadUrl, {
-        redirect: 'follow',
-        headers: { 'User-Agent': REAL_UA },
-      });
-    }
-  }
-
-  return resp;
 }
 
 export default async function handler(
@@ -71,19 +49,19 @@ export default async function handler(
   }
 
   try {
-    // 1) Fetch materials page
+    // 1) Fetch the City Council materials page
     const pageResp = await fetch(MATERIALS_URL);
     if (!pageResp.ok) {
       throw new Error(`Failed to fetch materials page: ${pageResp.status}`);
     }
     const html = await pageResp.text();
 
-    // 2) Scrape PDF & Drive links
+    // 2) Scrape only .pdf & Drive file-preview links
     const $ = cheerio.load(html);
     const rawLinks: string[] = [];
     $('a[href]').each((_i: number, el: any) => {
       const href = ($(el).attr('href') || '').trim();
-      const isPdf = /\.pdf($|\?)/i.test(href);
+      const isPdf       = /\.pdf($|\?)/i.test(href);
       const isDriveFile = /drive\.google\.com\/file\/d\/[A-Za-z0-9_-]+/.test(href);
       if (isPdf || isDriveFile) rawLinks.push(href);
     });
@@ -94,22 +72,23 @@ export default async function handler(
         .json({ summaries: [], message: 'No Minutes links found.' });
     }
 
-    // 3) Download & parse each PDF for “housing”
+    // 3) Download & parse each link, extracting "housing" paragraphs
     let collected = '';
-    for (const link of rawLinks) {
+    for (const href of rawLinks) {
       try {
-        const resp = link.includes('drive.google.com')
-          ? await fetchDrivePdf(link)
-          : await fetch(link);
+        // ←— here’s the only change in the loop:
+        const resp = href.includes('drive.google.com')
+          ? await fetchDrivePdf(href)
+          : await fetch(href, { redirect: 'follow' });
 
         if (!resp.ok) {
-          console.warn(`Skipping ${link}: HTTP ${resp.status}`);
+          console.warn(`Skipping ${href}: HTTP ${resp.status}`);
           continue;
         }
 
         const contentType = (resp.headers.get('content-type') || '').toLowerCase();
         if (!contentType.includes('pdf') && !contentType.includes('octet-stream')) {
-          console.warn(`Skipping ${link}: content-type ${contentType}`);
+          console.warn(`Skipping ${href}: content-type ${contentType}`);
           continue;
         }
 
@@ -123,7 +102,7 @@ export default async function handler(
             collected += p.trim() + '\n\n';
           });
       } catch (err: any) {
-        console.warn(`Error parsing ${link}: ${err.message}`);
+        console.warn(`Error parsing ${href}: ${err.message}`);
       }
     }
 
