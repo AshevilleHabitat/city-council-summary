@@ -111,14 +111,16 @@ export default async function handler(
             continue; // skip this file entirely
           }
 
-          // 6a) Try authenticated Service Account fetch
+          // 6a) Authenticated download with supportsAllDrives
           try {
-            const arrayBuffer = await drive.files
-              .get(
-                { fileId, alt: 'media', supportsAllDrives: true },
-                { responseType: 'arraybuffer' }
-              )
-              .then(r => r.data as ArrayBuffer);
+            const arrayBuffer = await drive.files.get(
+              {
+                fileId,
+                alt: 'media',
+                supportsAllDrives: true,
+              },
+              { responseType: 'arraybuffer' }
+            ).then(r => r.data as ArrayBuffer);
             buffer = Buffer.from(new Uint8Array(arrayBuffer));
           } catch (driveErr: any) {
             // 6b) Fallback to public-file API key if available
