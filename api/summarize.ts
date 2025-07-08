@@ -10,33 +10,71 @@ const GEMINI_ENDPOINT =
   'https://generativelanguage.googleapis.com/v1beta2/models/text-bison-001:generateText';
 
 /**
- * Always fetches the real PDF from Google Drive the same way your browser does.
+ * Proof-of-concept Drive downloader that:
+ * 1. Hits the uc?export=download URL with a browser UA
+ * 2. Follows all redirects
+ * 3. If you still get HTML, parses out the confirm= token or #uc-download-link
+ *    and re-fetches that link.
  */
 async function fetchDrivePdf(link: string): Promise<FetchResponse> {
+  // Browser-like headers
+  const headers = {
+    'User-Agent':
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ' +
+      'AppleWebKit/537.36 (KHTML, like Gecko) ' +
+      'Chrome/115.0.0.0 Safari/537.36',
+    'Accept': 'application/pdf,application/octet-stream,*/*',
+    // if needed, you can also send a referer:
+    // 'Referer': 'https://drive.google.com'
+  };
+
   // 1) Extract the fileId
   const idMatch =
     link.match(/\/d\/([A-Za-z0-9_-]+)\//) ||
     link.match(/[?&]id=([A-Za-z0-9_-]+)/);
   const fileId = idMatch?.[1];
   if (!fileId) {
-    // Not a Drive URL we recognize, fall back to normal fetch
-    return fetch(link, { redirect: 'follow' });
+    // not a Drive URL, just fetch normally
+    return fetch(link, { redirect: 'follow', headers });
   }
 
-  // 2) Build the direct-download URL you tested in your browser
-  const downloadUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
+  // 2) Build the direct-download URL
+  const baseUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
 
-  // 3) Fetch it with redirect-following and a browser UA
-  return fetch(downloadUrl, {
-    redirect: 'follow',
-    headers: {
-      'User-Agent':
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ' +
-        'AppleWebKit/537.36 (KHTML, like Gecko) ' +
-        'Chrome/115.0.0.0 Safari/537.36',
-      'Accept': 'application/pdf,application/octet-stream,*/*',
-    },
-  });
+  // 3) First attempt: follow redirects
+  let resp = await fetch(baseUrl, { redirect: 'follow', headers });
+  let ct = (resp.headers.get('content-type') || '').toLowerCase();
+
+  // 4) If we got HTML, parse out the confirm token or download link
+  if (!ct.includes('pdf') && !ct.includes('octet-stream')) {
+    const html = await resp.text();
+    const $ = cheerio.load(html);
+
+    // Try the #uc-download-link element first
+    let dlHref = $('a#uc-download-link').attr('href');
+
+    // Fallback: look for confirm=XYZ in a href
+    if (!dlHref) {
+      const m = html.match(/confirm=([0-9A-Za-z_-]+)&amp;id=/) ||
+                html.match(/confirm=([0-9A-Za-z_-]+)&id=/);
+      if (m) {
+        dlHref = `/uc?export=download&confirm=${m[1]}&id=${fileId}`;
+      }
+    }
+
+    if (dlHref) {
+      // Normalize &amp; → &
+      const downloadUrl =
+        dlHref.startsWith('http')
+          ? dlHref.replace(/&amp;/g, '&')
+          : 'https://drive.google.com' + dlHref.replace(/&amp;/g, '&');
+
+      // 5) Re-fetch the real download link
+      resp = await fetch(downloadUrl, { redirect: 'follow', headers });
+    }
+  }
+
+  return resp;
 }
 
 export default async function handler(
@@ -49,14 +87,14 @@ export default async function handler(
   }
 
   try {
-    // 1) Fetch the City Council materials page
+    // 1) Load the materials page
     const pageResp = await fetch(MATERIALS_URL);
     if (!pageResp.ok) {
       throw new Error(`Failed to fetch materials page: ${pageResp.status}`);
     }
     const html = await pageResp.text();
 
-    // 2) Scrape only .pdf & Drive file-preview links
+    // 2) Scrape for .pdf + Drive-preview links
     const $ = cheerio.load(html);
     const rawLinks: string[] = [];
     $('a[href]').each((_i: number, el: any) => {
@@ -72,11 +110,10 @@ export default async function handler(
         .json({ summaries: [], message: 'No Minutes links found.' });
     }
 
-    // 3) Download & parse each link, extracting "housing" paragraphs
+    // 3) Download & parse each PDF for "housing"
     let collected = '';
     for (const href of rawLinks) {
       try {
-        // ←— here’s the only change in the loop:
         const resp = href.includes('drive.google.com')
           ? await fetchDrivePdf(href)
           : await fetch(href, { redirect: 'follow' });
@@ -86,9 +123,9 @@ export default async function handler(
           continue;
         }
 
-        const contentType = (resp.headers.get('content-type') || '').toLowerCase();
-        if (!contentType.includes('pdf') && !contentType.includes('octet-stream')) {
-          console.warn(`Skipping ${href}: content-type ${contentType}`);
+        const ct = (resp.headers.get('content-type') || '').toLowerCase();
+        if (!ct.includes('pdf') && !ct.includes('octet-stream')) {
+          console.warn(`Skipping ${href}: content-type ${ct}`);
           continue;
         }
 
@@ -124,7 +161,7 @@ export default async function handler(
     const data = (await geminiResp.json()) as { candidates?: { output: string }[] };
     const summary = data.candidates?.[0]?.output || 'No summary returned.';
 
-    // 5) Return summaries array
+    // 5) Return the array of summaries
     return res.status(200).json({ summaries: [summary] });
   } catch (err: any) {
     console.error('🚨 handler error:', err);
