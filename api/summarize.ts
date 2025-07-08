@@ -15,70 +15,54 @@ export default async function handler(
   _req: VercelRequest,
   res: VercelResponse
 ) {
-  // 1) Service-Account ENV guard & auth setup
+  // 1) Service‐Account ENV guard & auth setup
   const b64 = process.env.GSA_KEY_B64;
   if (!b64) {
-    console.error('⚠️ GSA_KEY_B64 is not set');
-    return res
-      .status(500)
-      .json({ error: 'Missing GSA_KEY_B64 environment variable' });
+    console.error('⚠️ Missing GSA_KEY_B64');
+    return res.status(500).json({ error: 'GSA_KEY_B64 not set' });
   }
 
   let drive;
   try {
-    const creds = JSON.parse(
-      Buffer.from(b64, 'base64').toString('utf8')
-    );
+    const creds = JSON.parse(Buffer.from(b64, 'base64').toString('utf8'));
     const auth = new google.auth.GoogleAuth({
       credentials: creds,
       scopes: ['https://www.googleapis.com/auth/drive.readonly'],
     });
     drive = google.drive({ version: 'v3', auth });
   } catch (e: any) {
-    console.error('⚠️ Failed to initialize GoogleAuth:', e);
-    return res
-      .status(500)
-      .json({ error: 'Invalid GSA_KEY_B64 JSON' });
+    console.error('⚠️ Invalid GSA_KEY_B64 JSON:', e);
+    return res.status(500).json({ error: 'Invalid GSA_KEY_B64' });
   }
 
-  // 2) Gemini API key guard
+  // 2) Gemini & optional public‐key guards
   const apiKey = process.env.GEMINI_API_KEY ?? process.env.API_KEY;
   if (!apiKey) {
-    return res
-      .status(500)
-      .json({ error: 'Missing GEMINI_API_KEY environment variable' });
+    return res.status(500).json({ error: 'GEMINI_API_KEY not set' });
   }
-
-  // 3) Optional Drive API key for public-file fallback
-  const publicKey = process.env.DRIVE_API_KEY;
+  const publicKey = process.env.DRIVE_API_KEY; // optional fallback
 
   try {
-    // 4) Fetch materials page
+    // 3) Fetch and scrape the materials page
     const pageResp = await fetch(MATERIALS_URL);
-    if (!pageResp.ok) {
-      throw new Error(`Failed to fetch materials page: ${pageResp.status}`);
-    }
-    const html = await pageResp.text();
+    if (!pageResp.ok) throw new Error(`Materials fetch ${pageResp.status}`);
+    const $ = cheerio.load(await pageResp.text());
 
-    // 5) Scrape PDF & Drive-preview links
-    const $ = cheerio.load(html);
     const rawLinks: string[] = [];
     $('a[href]').each((_i: number, el: any) => {
       const href = ($(el).attr('href') || '').trim();
-      const isPdf = /\.pdf($|\?)/i.test(href);
-      const isDrive =
-        /drive\.google\.com\/file\/d\/[A-Za-z0-9_-]+/.test(href) ||
-        /drive\.google\.com\/.*[?&]id=[A-Za-z0-9_-]+/.test(href);
+      const isPdf   = /\.pdf($|\?)/i.test(href);
+      const isDrive = /drive\.google\.com\/file\/d\/[A-Za-z0-9_-]+/.test(href);
       if (isPdf || isDrive) rawLinks.push(href);
     });
 
     if (!rawLinks.length) {
       return res
         .status(200)
-        .json({ summaries: [], message: 'No Minutes links found.' });
+        .json({ summaries: [], message: 'No Minutes found.' });
     }
 
-    // 6) Download & parse each PDF for "housing"
+    // 4) Download & extract “housing” text from each PDF
     let collected = '';
     for (const href of rawLinks) {
       try {
@@ -89,61 +73,33 @@ export default async function handler(
           const m =
             href.match(/\/d\/([A-Za-z0-9_-]+)\//) ||
             href.match(/[?&]id=([A-Za-z0-9_-]+)/);
-          if (!m) {
-            console.warn('Could not parse Drive fileId from', href);
-            continue;
-          }
+          if (!m) throw new Error('Bad Drive URL');
           const fileId = m[1];
 
-          // --- Sanity-check metadata first ---
+          // #1: try Service Account download
           try {
-            await drive.files.get({
-              fileId,
-              fields: 'id,name,permissions',
-              supportsAllDrives: true,
-            });
-            console.log(`✅ Metadata OK for file ${fileId}`);
-          } catch (metaErr: any) {
-            console.error(
-              `❌ Metadata fetch failed for file ${fileId}:`,
-              metaErr
-            );
-            continue; // skip this file entirely
-          }
-
-          // 6a) Authenticated download with supportsAllDrives
-          try {
-            const arrayBuffer = await drive.files.get(
-              {
-                fileId,
-                alt: 'media',
-                supportsAllDrives: true,
-              },
-              { responseType: 'arraybuffer' }
-            ).then(r => r.data as ArrayBuffer);
-            buffer = Buffer.from(new Uint8Array(arrayBuffer));
-          } catch (driveErr: any) {
-            // 6b) Fallback to public-file API key if available
-            if (!publicKey) throw driveErr;
-            console.warn(
-              `Drive API download failed (${driveErr.code}); falling back to API key`
-            );
-            const publicUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&key=${publicKey}`;
-            const r2 = await fetch(publicUrl, { redirect: 'follow' });
-            if (!r2.ok) {
-              console.warn(`Public-file fetch failed: ${r2.status}`);
-              throw driveErr;
-            }
+            const ab = await drive.files
+              .get(
+                { fileId, alt: 'media', supportsAllDrives: true },
+                { responseType: 'arraybuffer' }
+              )
+              .then(r => r.data as ArrayBuffer);
+            buffer = Buffer.from(new Uint8Array(ab));
+          } catch (svcErr: any) {
+            // #2: fallback to public‐files API key
+            if (!publicKey) throw svcErr;
+            console.warn(`ServiceAccount failed (${svcErr.code}); falling back`);
+            const pubUrl = `https://www.googleapis.com/drive/v3/files/${fileId}` +
+              `?alt=media&key=${publicKey}`;
+            const r2 = await fetch(pubUrl, { redirect: 'follow' });
+            if (!r2.ok) throw new Error(`Public fetch ${r2.status}`);
             const ab2 = await r2.arrayBuffer();
             buffer = Buffer.from(new Uint8Array(ab2));
           }
         } else {
           // direct PDF link
           const r = await fetch(href, { redirect: 'follow' });
-          if (!r.ok) {
-            console.warn(`Skipping ${href}: HTTP ${r.status}`);
-            continue;
-          }
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
           const ab = await r.arrayBuffer();
           buffer = Buffer.from(new Uint8Array(ab));
         }
@@ -156,18 +112,18 @@ export default async function handler(
           .forEach((p: string) => {
             collected += p.trim() + '\n\n';
           });
-      } catch (err: any) {
-        console.warn(`Error processing ${href}: ${err.message}`);
+      } catch (dlErr: any) {
+        console.warn(`Skipping ${href}: ${dlErr.message}`);
       }
     }
 
     if (!collected.trim()) {
       return res
         .status(200)
-        .json({ summaries: [], message: 'No housing mentions found.' });
+        .json({ summaries: [], message: 'No housing found.' });
     }
 
-    // 7) Summarize via Gemini
+    // 5) Summarize via Gemini
     const geminiResp = await fetch(`${GEMINI_ENDPOINT}?key=${apiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -176,10 +132,11 @@ export default async function handler(
         temperature: 0.2,
       }),
     });
-    const data = (await geminiResp.json()) as { candidates?: { output: string }[] };
-    const summary = data.candidates?.[0]?.output || 'No summary returned.';
+    const data = (await geminiResp.json()) as {
+      candidates?: { output: string }[];
+    };
+    const summary = data.candidates?.[0]?.output ?? 'No summary returned.';
 
-    // 8) Return summaries array
     return res.status(200).json({ summaries: [summary] });
   } catch (err: any) {
     console.error('🚨 handler error:', err);
