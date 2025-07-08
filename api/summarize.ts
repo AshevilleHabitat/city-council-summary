@@ -15,7 +15,7 @@ export default async function handler(
   _req: VercelRequest,
   res: VercelResponse
 ) {
-  // 1) Service-Account ENV Guard & Auth Setup
+  // 1) Service-Account ENV guard & auth setup
   const b64 = process.env.GSA_KEY_B64;
   if (!b64) {
     console.error('⚠️ GSA_KEY_B64 is not set');
@@ -46,30 +46,30 @@ export default async function handler(
   if (!apiKey) {
     return res
       .status(500)
-      .json({ error: 'Missing GEMINI_API_KEY in env.' });
+      .json({ error: 'Missing GEMINI_API_KEY environment variable' });
   }
 
+  // 3) Optional Drive API key for public-file fallback
+  const publicKey = process.env.DRIVE_API_KEY;
+
   try {
-    // 3) Fetch the materials page
+    // 4) Fetch materials page
     const pageResp = await fetch(MATERIALS_URL);
     if (!pageResp.ok) {
       throw new Error(`Failed to fetch materials page: ${pageResp.status}`);
     }
     const html = await pageResp.text();
 
-    // 4) Scrape PDF & Drive-preview links
+    // 5) Scrape PDF & Drive-preview links
     const $ = cheerio.load(html);
     const rawLinks: string[] = [];
     $('a[href]').each((_i: number, el: any) => {
       const href = ($(el).attr('href') || '').trim();
       const isPdf = /\.pdf($|\?)/i.test(href);
-      const isDriveFile =
+      const isDrive =
         /drive\.google\.com\/file\/d\/[A-Za-z0-9_-]+/.test(href) ||
-        (/drive\.google\.com\/.*[?&]id=[A-Za-z0-9_-]+/.test(href) &&
-         !/\/folders\//.test(href));
-      if (isPdf || isDriveFile) {
-        rawLinks.push(href);
-      }
+        /drive\.google\.com\/.*[?&]id=[A-Za-z0-9_-]+/.test(href);
+      if (isPdf || isDrive) rawLinks.push(href);
     });
 
     if (!rawLinks.length) {
@@ -78,7 +78,7 @@ export default async function handler(
         .json({ summaries: [], message: 'No Minutes links found.' });
     }
 
-    // 5) Download & parse each PDF, extracting “housing”
+    // 6) Download & parse each PDF for "housing"
     let collected = '';
     for (const href of rawLinks) {
       try {
@@ -94,12 +94,27 @@ export default async function handler(
             continue;
           }
           const fileId = m[1];
-          // fetch raw PDF via Drive API
-          const arrayBuffer = await drive.files.get(
-            { fileId, alt: 'media' },
-            { responseType: 'arraybuffer' }
-          ).then(r => r.data as ArrayBuffer);
-          buffer = Buffer.from(new Uint8Array(arrayBuffer));
+
+          // 6a) Try authenticated Service Account fetch
+          try {
+            const arrayBuffer = await drive.files.get(
+              { fileId, alt: 'media' },
+              { responseType: 'arraybuffer' }
+            ).then(r => r.data as ArrayBuffer);
+            buffer = Buffer.from(new Uint8Array(arrayBuffer));
+          } catch (driveErr: any) {
+            // 6b) Fallback to public-file API key if available
+            if (!publicKey) throw driveErr;
+            console.warn(`Drive API failed (${driveErr.code}); falling back to API key`);
+            const publicUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&key=${publicKey}`;
+            const r2 = await fetch(publicUrl, { redirect: 'follow' });
+            if (!r2.ok) {
+              console.warn(`Public-file fetch failed: ${r2.status}`);
+              throw driveErr;
+            }
+            const ab2 = await r2.arrayBuffer();
+            buffer = Buffer.from(new Uint8Array(ab2));
+          }
         } else {
           // direct PDF link
           const r = await fetch(href, { redirect: 'follow' });
@@ -107,10 +122,11 @@ export default async function handler(
             console.warn(`Skipping ${href}: HTTP ${r.status}`);
             continue;
           }
-          const arrayBuffer = await r.arrayBuffer();
-          buffer = Buffer.from(arrayBuffer);
+          const ab = await r.arrayBuffer();
+          buffer = Buffer.from(new Uint8Array(ab));
         }
 
+        // parse PDF text
         const { text } = await pdfParse(buffer);
         text
           .split(/\r?\n{2,}/)
@@ -129,7 +145,7 @@ export default async function handler(
         .json({ summaries: [], message: 'No housing mentions found.' });
     }
 
-    // 6) Summarize via Gemini
+    // 7) Summarize via Gemini
     const geminiResp = await fetch(`${GEMINI_ENDPOINT}?key=${apiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -141,7 +157,7 @@ export default async function handler(
     const data = (await geminiResp.json()) as { candidates?: { output: string }[] };
     const summary = data.candidates?.[0]?.output || 'No summary returned.';
 
-    // 7) Return summaries array
+    // 8) Return summaries array
     return res.status(200).json({ summaries: [summary] });
   } catch (err: any) {
     console.error('🚨 handler error:', err);
