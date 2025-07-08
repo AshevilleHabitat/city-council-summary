@@ -41,7 +41,6 @@ export default async function handler(
     return res.status(500).json({ error: 'GEMINI_API_KEY not set' });
   }
   const publicKey = process.env.DRIVE_API_KEY; // optional fallback
-  console.log('🔑 DRIVE_API_KEY is:', publicKey);
 
   try {
     // 3) Fetch and scrape the materials page
@@ -60,24 +59,26 @@ export default async function handler(
     if (!rawLinks.length) {
       return res
         .status(200)
-        .json({ summaries: [], message: 'No Minutes found.' });
+        .json({ summaries: [], message: 'No meeting minutes found.' });
     }
 
-    // 4) Download & extract “housing” text from each PDF
+    // 4) Download & extract full text from each PDF
     let collected = '';
     for (const href of rawLinks) {
       try {
         let buffer: Buffer;
-
         if (href.includes('drive.google.com')) {
           // extract fileId
           const m =
             href.match(/\/d\/([A-Za-z0-9_-]+)\//) ||
             href.match(/[?&]id=([A-Za-z0-9_-]+)/);
-          if (!m) throw new Error('Bad Drive URL');
+          if (!m) {
+            console.warn('Skipping bad Drive URL:', href);
+            continue;
+          }
           const fileId = m[1];
 
-          // #1: try Service Account download
+          // try Service Account download
           try {
             const ab = await drive.files
               .get(
@@ -87,9 +88,9 @@ export default async function handler(
               .then(r => r.data as ArrayBuffer);
             buffer = Buffer.from(new Uint8Array(ab));
           } catch (svcErr: any) {
-            // #2: fallback to public‐files API key
+            // fallback to public-files API key
             if (!publicKey) throw svcErr;
-            console.warn(`ServiceAccount failed (${svcErr.code}); falling back`);
+            console.warn(`SA download failed (${svcErr.code}); falling back`);
             const pubUrl = `https://www.googleapis.com/drive/v3/files/${fileId}` +
               `?alt=media&key=${publicKey}`;
             const r2 = await fetch(pubUrl, { redirect: 'follow' });
@@ -105,14 +106,9 @@ export default async function handler(
           buffer = Buffer.from(new Uint8Array(ab));
         }
 
-        // parse PDF text
+        // extract a plain-text version of the PDF
         const { text } = await pdfParse(buffer);
-        text
-          .split(/\r?\n{2,}/)
-          .filter((p: string) => /housing/i.test(p))
-          .forEach((p: string) => {
-            collected += p.trim() + '\n\n';
-          });
+        collected += text + '\n\n';
       } catch (dlErr: any) {
         console.warn(`Skipping ${href}: ${dlErr.message}`);
       }
@@ -121,15 +117,17 @@ export default async function handler(
     if (!collected.trim()) {
       return res
         .status(200)
-        .json({ summaries: [], message: 'No housing found.' });
+        .json({ summaries: [], message: 'Could not extract text from PDFs.' });
     }
 
-    // 5) Summarize via Gemini
+    // 5) Summarize full text via Gemini (search for housing inside prompt)
     const geminiResp = await fetch(`${GEMINI_ENDPOINT}?key=${apiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        prompt: { text: `Summarize housing content:\n\n${collected}` },
+        prompt: {
+          text: `Here are the recent meeting minutes. Please find and summarize all mentions of housing or affordable housing within this text:\n\n${collected}`,
+        },
         temperature: 0.2,
       }),
     });
