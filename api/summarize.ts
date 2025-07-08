@@ -6,6 +6,7 @@ import * as cheerio from 'cheerio';
 import pdfParse from 'pdf-parse';
 import { google } from 'googleapis';
 
+
 const MATERIALS_URL =
   'https://www.ashevillenc.gov/government/city-council-meeting-materials/';
 const GEMINI_ENDPOINT =
@@ -138,3 +139,4 @@ export default async function handler(
     return res.status(500).json({ error: err.message });
   }
 }
+
