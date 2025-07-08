@@ -95,17 +95,37 @@ export default async function handler(
           }
           const fileId = m[1];
 
+          // --- Sanity-check metadata first ---
+          try {
+            await drive.files.get({
+              fileId,
+              fields: 'id,name,permissions',
+              supportsAllDrives: true,
+            });
+            console.log(`✅ Metadata OK for file ${fileId}`);
+          } catch (metaErr: any) {
+            console.error(
+              `❌ Metadata fetch failed for file ${fileId}:`,
+              metaErr
+            );
+            continue; // skip this file entirely
+          }
+
           // 6a) Try authenticated Service Account fetch
           try {
-            const arrayBuffer = await drive.files.get(
-              { fileId, alt: 'media' },
-              { responseType: 'arraybuffer' }
-            ).then(r => r.data as ArrayBuffer);
+            const arrayBuffer = await drive.files
+              .get(
+                { fileId, alt: 'media', supportsAllDrives: true },
+                { responseType: 'arraybuffer' }
+              )
+              .then(r => r.data as ArrayBuffer);
             buffer = Buffer.from(new Uint8Array(arrayBuffer));
           } catch (driveErr: any) {
             // 6b) Fallback to public-file API key if available
             if (!publicKey) throw driveErr;
-            console.warn(`Drive API failed (${driveErr.code}); falling back to API key`);
+            console.warn(
+              `Drive API download failed (${driveErr.code}); falling back to API key`
+            );
             const publicUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&key=${publicKey}`;
             const r2 = await fetch(publicUrl, { redirect: 'follow' });
             if (!r2.ok) {
