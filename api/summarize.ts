@@ -41,6 +41,7 @@ export default async function handler(
     return res.status(500).json({ error: 'GEMINI_API_KEY not set' });
   }
   const publicKey = process.env.DRIVE_API_KEY; // optional fallback
+  console.log('🔑 DRIVE_API_KEY is:', publicKey);
 
   try {
     // 3) Fetch and scrape the materials page
